@@ -2,11 +2,11 @@
 
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical, ScrollableContainer, Center
-from textual.widgets import Header, Footer, Static, DataTable, Log, Button, Input, Label
+from textual.widgets import Header, Footer, Static, DataTable, Log, Button, Input, Label, Select
 from textual.reactive import reactive
 from textual.screen import Screen, ModalScreen
 from datetime import datetime
-from typing import List, Dict
+from typing import List, Dict, Optional, Tuple
 
 from agentctl.core import database
 
@@ -350,6 +350,112 @@ class EditRepositoryModal(ModalScreen):
                 self.app.notify(f"Error updating repository: {e}", severity="error")
 
 
+class CreateTaskModal(ModalScreen):
+    """Modal for creating a new task"""
+
+    def __init__(self, project_id: Optional[str] = None, repository_id: Optional[str] = None):
+        super().__init__()
+        self.project_id = project_id
+        self.repository_id = repository_id
+
+    def compose(self) -> ComposeResult:
+        # Get projects for dropdown
+        projects = database.list_projects()
+        project_options = [(p['id'], p['name']) for p in projects]
+
+        # Get repositories for dropdown
+        repositories = database.list_repositories()
+        repo_options = [(r['id'], r['name']) for r in repositories]
+
+        yield Container(
+            Label("Create New Task", id="modal-title"),
+            Input(placeholder="Task ID (e.g., RRA-API-0042)", id="task-id"),
+            Input(placeholder="Title", id="task-title"),
+            Input(placeholder="Description (optional)", id="task-desc"),
+            Select(
+                options=project_options,
+                prompt="Select Project",
+                id="task-project",
+                value=self.project_id if self.project_id else Select.BLANK
+            ),
+            Select(
+                options=repo_options,
+                prompt="Select Repository (optional)",
+                id="task-repo",
+                allow_blank=True,
+                value=self.repository_id if self.repository_id else Select.BLANK
+            ),
+            Select(
+                options=[
+                    ("FEATURE", "Feature"),
+                    ("BUG", "Bug"),
+                    ("REFACTOR", "Refactor"),
+                    ("DOCS", "Documentation"),
+                    ("TEST", "Test"),
+                    ("CHORE", "Chore")
+                ],
+                prompt="Category",
+                id="task-category",
+                value="FEATURE"
+            ),
+            Input(placeholder="Type (e.g., feature, bugfix)", id="task-type", value="feature"),
+            Select(
+                options=[
+                    ("high", "High"),
+                    ("medium", "Medium"),
+                    ("low", "Low")
+                ],
+                prompt="Priority",
+                id="task-priority",
+                value="medium"
+            ),
+            Horizontal(
+                Button("Create", variant="primary", id="create-btn"),
+                Button("Cancel", variant="default", id="cancel-btn"),
+                classes="button-row"
+            ),
+            id="create-task-modal"
+        )
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "cancel-btn":
+            self.dismiss(None)
+        elif event.button.id == "create-btn":
+            task_id = self.query_one("#task-id", Input).value
+            title = self.query_one("#task-title", Input).value
+            description = self.query_one("#task-desc", Input).value
+            project_id = self.query_one("#task-project", Select).value
+            repo_id = self.query_one("#task-repo", Select).value
+            category = self.query_one("#task-category", Select).value
+            task_type = self.query_one("#task-type", Input).value
+            priority = self.query_one("#task-priority", Select).value
+
+            if not task_id or not title or not project_id:
+                self.app.notify("Task ID, Title, and Project are required", severity="error")
+                return
+
+            try:
+                # Handle blank repository selection
+                final_repo_id = None
+                if repo_id and repo_id != Select.BLANK:
+                    final_repo_id = repo_id
+
+                database.create_task(
+                    task_id=task_id.strip(),
+                    project_id=project_id,
+                    category=category,
+                    task_type=task_type.strip() or "feature",
+                    title=title.strip(),
+                    description=description.strip() if description else None,
+                    priority=priority,
+                    repository_id=final_repo_id
+                )
+                self.dismiss(task_id)
+                self.app.notify(f"Task {task_id} created!", severity="success")
+            except Exception as e:
+                self.app.notify(f"Error creating task: {e}", severity="error")
+
+
 class ProjectDetailScreen(Screen):
     """Screen showing project details with repositories and tasks"""
 
@@ -357,6 +463,7 @@ class ProjectDetailScreen(Screen):
         ("escape", "go_back", "Back"),
         ("r", "add_repo", "Add Repo"),
         ("e", "edit_repo", "Edit Repo"),
+        ("t", "create_task", "Create Task"),
         ("q", "quit", "Quit"),
     ]
 
@@ -448,6 +555,114 @@ class ProjectDetailScreen(Screen):
             self.app.push_screen(EditRepositoryModal(repository_id), check_result)
         else:
             self.app.notify("Select a repository to edit", severity="warning")
+
+    def action_create_task(self) -> None:
+        """Show modal to create a task for this project"""
+        def check_result(result):
+            if result:
+                self.load_tasks()
+
+        self.app.push_screen(CreateTaskModal(project_id=self.project_id), check_result)
+
+
+class TaskManagementScreen(Screen):
+    """Screen showing all tasks across all projects"""
+
+    BINDINGS = [
+        ("escape", "go_back", "Back"),
+        ("n", "create_task", "New Task"),
+        ("e", "edit_task", "Edit Task"),
+        ("d", "delete_task", "Delete Task"),
+        ("q", "quit", "Quit"),
+    ]
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Container(
+            Static("📋 TASK MANAGEMENT", classes="screen-title"),
+            DataTable(id="tasks-table"),
+            id="tasks-container"
+        )
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.load_tasks()
+
+    def load_tasks(self) -> None:
+        """Load and display all tasks"""
+        tasks = database.list_all_tasks()
+
+        table = self.query_one("#tasks-table", DataTable)
+        table.clear()
+        table.add_columns("Task ID", "Project", "Repository", "Title", "Status", "Priority")
+        table.cursor_type = "row"
+
+        for task in tasks:
+            status_icon = {
+                "queued": "⚪",
+                "running": "🟢",
+                "blocked": "🟡",
+                "completed": "✅",
+                "failed": "🔴"
+            }.get(task.get('status', 'queued'), "⚪")
+
+            priority_icon = {
+                "high": "🔴",
+                "medium": "🟡",
+                "low": "🟢"
+            }.get(task.get('priority', 'medium'), "⚪")
+
+            table.add_row(
+                task['task_id'],
+                task.get('project_name', '-')[:20],
+                task.get('repository_name', '-')[:15] if task.get('repository_name') else '-',
+                task.get('title', '-')[:30],
+                f"{status_icon} {task['status'].upper()}",
+                f"{priority_icon} {task['priority'].upper()}"
+            )
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        """Handle row selection - open task detail view"""
+        if event.data_table.id == "tasks-table":
+            row = event.data_table.get_row_at(event.cursor_row)
+            task_id = str(row[0])
+            # TODO: Open TaskDetailScreen when implemented
+            self.app.notify(f"Task detail view coming soon for {task_id}", severity="information")
+
+    def action_go_back(self) -> None:
+        """Go back to main dashboard"""
+        self.app.pop_screen()
+
+    def action_create_task(self) -> None:
+        """Show modal to create a new task"""
+        def check_result(result):
+            if result:
+                self.load_tasks()
+
+        self.app.push_screen(CreateTaskModal(), check_result)
+
+    def action_edit_task(self) -> None:
+        """Show modal to edit selected task"""
+        table = self.query_one("#tasks-table", DataTable)
+        if table.row_count > 0 and table.cursor_row is not None:
+            row = table.get_row_at(table.cursor_row)
+            task_id = str(row[0])
+            # TODO: Open EditTaskModal when implemented
+            self.app.notify(f"Edit task modal coming soon for {task_id}", severity="information")
+
+    def action_delete_task(self) -> None:
+        """Delete selected task with confirmation"""
+        table = self.query_one("#tasks-table", DataTable)
+        if table.row_count > 0 and table.cursor_row is not None:
+            row = table.get_row_at(table.cursor_row)
+            task_id = str(row[0])
+            # TODO: Add confirmation modal
+            try:
+                database.delete_task(task_id)
+                self.load_tasks()
+                self.app.notify(f"Task {task_id} deleted", severity="success")
+            except Exception as e:
+                self.app.notify(f"Error deleting task: {e}", severity="error")
 
 
 class ProjectListScreen(Screen):
@@ -589,13 +804,17 @@ class AgentDashboard(App):
     }
 
     /* Modal styles */
-    #create-project-modal, #create-repo-modal, #edit-project-modal, #edit-repo-modal {
+    #create-project-modal, #create-repo-modal, #edit-project-modal, #edit-repo-modal, #create-task-modal {
         align: center middle;
         width: 60;
         height: auto;
         border: solid $accent;
         background: $surface;
         padding: 1 2;
+    }
+
+    Select {
+        margin: 1 0;
     }
 
     #modal-title {
@@ -627,7 +846,7 @@ class AgentDashboard(App):
         color: $text;
     }
 
-    #projects-container, #project-detail-container {
+    #projects-container, #project-detail-container, #tasks-container {
         height: 100%;
     }
 
@@ -647,6 +866,7 @@ class AgentDashboard(App):
         ("q", "quit", "Quit"),
         ("s", "status", "Status"),
         ("p", "manage_projects", "Projects"),
+        ("t", "manage_tasks", "Tasks"),
     ]
 
     def compose(self) -> ComposeResult:
@@ -678,6 +898,10 @@ class AgentDashboard(App):
     def action_manage_projects(self) -> None:
         """Open projects management screen"""
         self.push_screen(ProjectListScreen())
+
+    def action_manage_tasks(self) -> None:
+        """Open tasks management screen"""
+        self.push_screen(TaskManagementScreen())
 
 
 def run_dashboard():

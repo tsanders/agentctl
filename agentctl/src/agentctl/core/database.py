@@ -53,6 +53,7 @@ def init_db():
             completed_at INTEGER,
             tmux_session TEXT,
             git_branch TEXT,
+            worktree_path TEXT,
             agent_type TEXT,
             commits INTEGER DEFAULT 0,
             metadata TEXT,
@@ -307,6 +308,119 @@ def update_task_status(task_id: str, status: str, **kwargs):
 
     conn.commit()
     conn.close()
+
+
+def update_task(task_id: str, **fields) -> None:
+    """Update task fields (any provided fields are updated)"""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    if not fields:
+        conn.close()
+        return
+
+    set_clauses = []
+    params = []
+
+    for key, value in fields.items():
+        set_clauses.append(f"{key} = ?")
+        params.append(value)
+
+    params.append(task_id)
+
+    query = f"UPDATE tasks SET {', '.join(set_clauses)} WHERE id = ?"
+    cursor.execute(query, params)
+
+    conn.commit()
+    conn.close()
+
+
+def delete_task(task_id: str) -> None:
+    """Delete a task"""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+
+    conn.commit()
+    conn.close()
+
+
+def list_all_tasks(status: Optional[str] = None, priority: Optional[str] = None) -> List[Dict]:
+    """List all tasks with optional filters, joined with project and repository info"""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    conditions = []
+    params = []
+
+    if status:
+        conditions.append("t.status = ?")
+        params.append(status)
+    if priority:
+        conditions.append("t.priority = ?")
+        params.append(priority)
+
+    where_clause = " AND ".join(conditions) if conditions else "1=1"
+
+    cursor.execute(f"""
+        SELECT
+            t.id as task_id,
+            t.title,
+            t.description,
+            t.status,
+            t.priority,
+            t.category,
+            t.type,
+            t.phase,
+            t.created_at,
+            t.started_at,
+            t.completed_at,
+            t.tmux_session,
+            t.git_branch,
+            t.worktree_path,
+            t.agent_type,
+            t.commits,
+            p.id as project_id,
+            p.name as project_name,
+            r.id as repository_id,
+            r.name as repository_name,
+            r.path as repository_path
+        FROM tasks t
+        LEFT JOIN projects p ON t.project_id = p.id
+        LEFT JOIN repositories r ON t.repository_id = r.id
+        WHERE {where_clause}
+        ORDER BY t.created_at DESC
+    """, params)
+
+    tasks = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+
+    return tasks
+
+
+def get_task_with_details(task_id: str) -> Optional[Dict]:
+    """Get a task with full project and repository details"""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT
+            t.*,
+            p.name as project_name,
+            r.name as repository_name,
+            r.path as repository_path,
+            r.default_branch as repository_default_branch
+        FROM tasks t
+        LEFT JOIN projects p ON t.project_id = p.id
+        LEFT JOIN repositories r ON t.repository_id = r.id
+        WHERE t.id = ?
+    """, (task_id,))
+
+    row = cursor.fetchone()
+    conn.close()
+
+    return dict(row) if row else None
 
 
 # Project management functions
