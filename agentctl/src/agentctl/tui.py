@@ -249,7 +249,7 @@ class ProjectDetailScreen(Screen):
     """Screen showing project details with repositories and tasks"""
 
     BINDINGS = [
-        ("escape", "pop_screen", "Back"),
+        ("escape", "go_back", "Back"),
         ("r", "add_repo", "Add Repo"),
         ("q", "quit", "Quit"),
     ]
@@ -314,6 +314,10 @@ class ProjectDetailScreen(Screen):
                 task.get('priority', 'medium').upper()
             )
 
+    def action_go_back(self) -> None:
+        """Go back to project list"""
+        self.app.pop_screen()
+
     def action_add_repo(self) -> None:
         """Show modal to add a repository"""
         def check_result(result):
@@ -327,9 +331,8 @@ class ProjectListScreen(Screen):
     """Screen showing all projects"""
 
     BINDINGS = [
-        ("escape", "pop_screen", "Back"),
+        ("escape", "go_back", "Back"),
         ("n", "new_project", "New Project"),
-        ("enter", "select_project", "Open"),
         ("q", "quit", "Quit"),
     ]
 
@@ -362,6 +365,17 @@ class ProjectListScreen(Screen):
                 project.get('description') or '-',
                 created
             )
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        """Handle row selection in projects table"""
+        if event.data_table.id == "projects-table":
+            row = event.data_table.get_row_at(event.cursor_row)
+            project_id = str(row[0])
+            self.app.push_screen(ProjectDetailScreen(project_id))
+
+    def action_go_back(self) -> None:
+        """Go back to main dashboard"""
+        self.app.pop_screen()
 
     def action_new_project(self) -> None:
         """Show modal to create a new project"""
