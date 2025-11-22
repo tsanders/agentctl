@@ -456,6 +456,278 @@ class CreateTaskModal(ModalScreen):
                 self.app.notify(f"Error creating task: {e}", severity="error")
 
 
+class EditTaskModal(ModalScreen):
+    """Modal for editing an existing task"""
+
+    def __init__(self, task_id: str):
+        super().__init__()
+        self.task_id = task_id
+        self.task_data = database.get_task_with_details(task_id)
+
+    def compose(self) -> ComposeResult:
+        if not self.task_data:
+            yield Container(
+                Label("Task not found", id="modal-title"),
+                Button("Close", id="cancel-btn", variant="error"),
+                id="edit-task-modal"
+            )
+            return
+
+        # Get projects and repositories for dropdowns (label, value) format
+        projects = database.list_projects()
+        project_options = [(p['name'], p['id']) for p in projects]
+
+        repositories = database.list_repositories()
+        repo_options = [(r['name'], r['id']) for r in repositories]
+
+        yield Container(
+            Label(f"Edit Task: {self.task_id}", id="modal-title"),
+            Input(
+                placeholder="Title",
+                id="task-title",
+                value=self.task_data['title']
+            ),
+            Input(
+                placeholder="Description (optional)",
+                id="task-desc",
+                value=self.task_data.get('description') or ""
+            ),
+            Select(
+                options=project_options,
+                prompt="Select Project",
+                id="task-project",
+                value=self.task_data['project_id']
+            ),
+            Select(
+                options=repo_options,
+                prompt="Select Repository (optional)",
+                id="task-repo",
+                allow_blank=True,
+                value=self.task_data.get('repository_id') if self.task_data.get('repository_id') else Select.BLANK
+            ),
+            Select(
+                options=[
+                    ("Feature", "FEATURE"),
+                    ("Bug", "BUG"),
+                    ("Refactor", "REFACTOR"),
+                    ("Documentation", "DOCS"),
+                    ("Test", "TEST"),
+                    ("Chore", "CHORE")
+                ],
+                prompt="Category",
+                id="task-category",
+                value=self.task_data['category']
+            ),
+            Input(
+                placeholder="Type (e.g., feature, bugfix)",
+                id="task-type",
+                value=self.task_data['type']
+            ),
+            Select(
+                options=[
+                    ("High", "high"),
+                    ("Medium", "medium"),
+                    ("Low", "low")
+                ],
+                prompt="Priority",
+                id="task-priority",
+                value=self.task_data['priority']
+            ),
+            Select(
+                options=[
+                    ("Queued", "queued"),
+                    ("Running", "running"),
+                    ("Blocked", "blocked"),
+                    ("Completed", "completed"),
+                    ("Failed", "failed")
+                ],
+                prompt="Status",
+                id="task-status",
+                value=self.task_data['status']
+            ),
+            Container(
+                Button("Save", id="save-btn", variant="success"),
+                Button("Cancel", id="cancel-btn", variant="error"),
+                classes="button-row"
+            ),
+            id="edit-task-modal"
+        )
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "cancel-btn":
+            self.dismiss(None)
+        elif event.button.id == "save-btn":
+            if not self.task_data:
+                self.dismiss(None)
+                return
+
+            title = self.query_one("#task-title", Input).value
+            description = self.query_one("#task-desc", Input).value
+            project_id = self.query_one("#task-project", Select).value
+            repo_id = self.query_one("#task-repo", Select).value
+            category = self.query_one("#task-category", Select).value
+            task_type = self.query_one("#task-type", Input).value
+            priority = self.query_one("#task-priority", Select).value
+            status = self.query_one("#task-status", Select).value
+
+            if not title or not project_id:
+                self.app.notify("Title and Project are required", severity="error")
+                return
+
+            try:
+                # Handle blank repository selection
+                final_repo_id = None
+                if repo_id and repo_id != Select.BLANK:
+                    final_repo_id = repo_id
+
+                database.update_task(
+                    self.task_id,
+                    title=title.strip(),
+                    description=description.strip() if description else None,
+                    project_id=project_id,
+                    repository_id=final_repo_id,
+                    category=category,
+                    type=task_type.strip(),
+                    priority=priority,
+                    status=status
+                )
+                database.add_event(self.task_id, "updated")
+                self.dismiss(self.task_id)
+                self.app.notify(f"Task {self.task_id} updated!", severity="success")
+            except Exception as e:
+                self.app.notify(f"Error updating task: {e}", severity="error")
+
+
+class StartTaskModal(ModalScreen):
+    """Modal for starting a task with optional worktree creation"""
+
+    def __init__(self, task_id: str):
+        super().__init__()
+        self.task_id = task_id
+        self.task_data = database.get_task_with_details(task_id)
+        self.create_worktree = False
+
+    def compose(self) -> ComposeResult:
+        if not self.task_data:
+            yield Container(
+                Label("Task not found", id="modal-title"),
+                Button("Close", id="cancel-btn", variant="error"),
+                id="start-task-modal"
+            )
+            return
+
+        # Check if task has a repository
+        if not self.task_data.get('repository_id'):
+            yield Container(
+                Label(f"Start Task: {self.task_id}", id="modal-title"),
+                Static("❌ No repository associated with this task", classes="detail-row"),
+                Static("Cannot create worktree without a repository.", classes="detail-row"),
+                Container(
+                    Button("Start Anyway", id="start-btn", variant="success"),
+                    Button("Cancel", id="cancel-btn", variant="error"),
+                    classes="button-row"
+                ),
+                id="start-task-modal"
+            )
+            return
+
+        from pathlib import Path
+        from agentctl.core.worktree import get_worktree_path, get_branch_name
+
+        # Calculate worktree path and branch name
+        repo_path = Path(self.task_data['repository_path'])
+        worktree_path = get_worktree_path(repo_path, self.task_id)
+        branch_name = get_branch_name(self.task_data['category'], self.task_id)
+
+        yield Container(
+            Label(f"Start Task: {self.task_id}", id="modal-title"),
+            Static(f"Title: {self.task_data['title']}", classes="detail-row"),
+            Static(f"Repository: {self.task_data['repository_name']}", classes="detail-row"),
+            Static("", classes="detail-row"),  # Spacer
+            Static("🌿 Git Worktree Configuration", classes="widget-title"),
+            Static(f"Branch: {branch_name}", classes="detail-row"),
+            Static(f"Worktree Path: {worktree_path}", classes="detail-row"),
+            Static("", classes="detail-row"),  # Spacer
+            Select(
+                options=[
+                    ("Yes - Create worktree and branch", True),
+                    ("No - Just update status", False)
+                ],
+                prompt="Create Git Worktree?",
+                id="worktree-option",
+                value=True
+            ),
+            Container(
+                Button("Start", id="start-btn", variant="success"),
+                Button("Cancel", id="cancel-btn", variant="error"),
+                classes="button-row"
+            ),
+            id="start-task-modal"
+        )
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "cancel-btn":
+            self.dismiss(None)
+        elif event.button.id == "start-btn":
+            if not self.task_data:
+                self.dismiss(None)
+                return
+
+            from datetime import datetime
+            from pathlib import Path
+
+            # Get worktree option if repository exists
+            create_worktree = False
+            if self.task_data.get('repository_id'):
+                try:
+                    create_worktree = self.query_one("#worktree-option", Select).value
+                except Exception:
+                    pass
+
+            try:
+                # Update task status to running
+                database.update_task_status(
+                    self.task_id,
+                    "running",
+                    started_at=int(datetime.now().timestamp())
+                )
+
+                # Create worktree if requested
+                if create_worktree and self.task_data.get('repository_path'):
+                    from agentctl.core.worktree import create_worktree, get_worktree_path, get_branch_name
+
+                    repo_path = Path(self.task_data['repository_path'])
+                    base_branch = self.task_data.get('repository_default_branch', 'main')
+
+                    worktree_info = create_worktree(
+                        repo_path,
+                        self.task_id,
+                        self.task_data['category'],
+                        base_branch
+                    )
+
+                    # Update task with worktree and branch info
+                    database.update_task(
+                        self.task_id,
+                        git_branch=worktree_info['branch_name'],
+                        worktree_path=worktree_info['worktree_path']
+                    )
+
+                    self.app.notify(
+                        f"Task started with worktree at {worktree_info['worktree_path']}",
+                        severity="success",
+                        timeout=5
+                    )
+                else:
+                    self.app.notify(f"Task {self.task_id} started", severity="success")
+
+                database.add_event(self.task_id, "started")
+                self.dismiss(self.task_id)
+
+            except Exception as e:
+                self.app.notify(f"Error starting task: {e}", severity="error")
+
+
 class ProjectDetailScreen(Screen):
     """Screen showing project details with repositories and tasks"""
 
@@ -626,8 +898,7 @@ class TaskManagementScreen(Screen):
         if event.data_table.id == "tasks-table":
             row = event.data_table.get_row_at(event.cursor_row)
             task_id = str(row[0])
-            # TODO: Open TaskDetailScreen when implemented
-            self.app.notify(f"Task detail view coming soon for {task_id}", severity="information")
+            self.app.push_screen(TaskDetailScreen(task_id))
 
     def action_go_back(self) -> None:
         """Go back to main dashboard"""
@@ -647,8 +918,12 @@ class TaskManagementScreen(Screen):
         if table.row_count > 0 and table.cursor_row is not None:
             row = table.get_row_at(table.cursor_row)
             task_id = str(row[0])
-            # TODO: Open EditTaskModal when implemented
-            self.app.notify(f"Edit task modal coming soon for {task_id}", severity="information")
+
+            def check_result(result):
+                if result:
+                    self.load_tasks()
+
+            self.app.push_screen(EditTaskModal(task_id), check_result)
 
     def action_delete_task(self) -> None:
         """Delete selected task with confirmation"""
@@ -663,6 +938,168 @@ class TaskManagementScreen(Screen):
                 self.app.notify(f"Task {task_id} deleted", severity="success")
             except Exception as e:
                 self.app.notify(f"Error deleting task: {e}", severity="error")
+
+
+class TaskDetailScreen(Screen):
+    """Screen showing comprehensive task details and actions"""
+
+    BINDINGS = [
+        ("escape", "go_back", "Back"),
+        ("e", "edit_task", "Edit"),
+        ("s", "start_task", "Start"),
+        ("c", "complete_task", "Complete"),
+        ("d", "delete_task", "Delete"),
+        ("q", "quit", "Quit"),
+    ]
+
+    def __init__(self, task_id: str):
+        super().__init__()
+        self.task_id = task_id
+        self.task_data = None
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Container(
+            Container(id="task-detail-content"),
+            id="task-detail-container"
+        )
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.load_task_details()
+
+    def load_task_details(self) -> None:
+        """Load and display comprehensive task information"""
+        self.task_data = database.get_task_with_details(self.task_id)
+
+        if not self.task_data:
+            self.app.notify(f"Task {self.task_id} not found", severity="error")
+            self.app.pop_screen()
+            return
+
+        container = self.query_one("#task-detail-content", Container)
+        container.mount(
+            Static(f"📋 {self.task_id}: {self.task_data['title']}", classes="screen-title"),
+
+            # Task Information Section
+            Container(
+                Static("ℹ️  TASK INFORMATION", classes="widget-title"),
+                Static(f"Title: {self.task_data['title']}", classes="detail-row"),
+                Static(f"Description: {self.task_data.get('description') or 'No description'}", classes="detail-row"),
+                Static(f"Category: {self.task_data['category']}", classes="detail-row"),
+                Static(f"Type: {self.task_data['type']}", classes="detail-row"),
+                Static(f"Priority: {self.task_data['priority'].upper()}", classes="detail-row"),
+                id="info-section"
+            ),
+
+            # Project & Repository Section
+            Container(
+                Static("📦 PROJECT & REPOSITORY", classes="widget-title"),
+                Static(f"Project: {self.task_data.get('project_name', 'Unknown')}", classes="detail-row"),
+                Static(f"Repository: {self.task_data.get('repository_name', 'None')}", classes="detail-row"),
+                Static(f"Repository Path: {self.task_data.get('repository_path', 'N/A')}", classes="detail-row"),
+                id="project-section"
+            ),
+
+            # Status & Progress Section
+            Container(
+                Static("📊 STATUS & PROGRESS", classes="widget-title"),
+                Static(f"Status: {self._format_status(self.task_data['status'])}", classes="detail-row"),
+                Static(f"Phase: {self.task_data.get('phase') or 'Not started'}", classes="detail-row"),
+                Static(f"Agent Type: {self.task_data.get('agent_type') or 'Not assigned'}", classes="detail-row"),
+                Static(f"Commits: {self.task_data.get('commits', 0)}", classes="detail-row"),
+                id="status-section"
+            ),
+
+            # Timestamps Section
+            Container(
+                Static("🕒 TIMESTAMPS", classes="widget-title"),
+                Static(f"Created: {self._format_timestamp(self.task_data.get('created_at'))}", classes="detail-row"),
+                Static(f"Started: {self._format_timestamp(self.task_data.get('started_at'))}", classes="detail-row"),
+                Static(f"Completed: {self._format_timestamp(self.task_data.get('completed_at'))}", classes="detail-row"),
+                id="timestamps-section"
+            ),
+
+            # Git & Session Section
+            Container(
+                Static("🔧 GIT & SESSION", classes="widget-title"),
+                Static(f"Branch: {self.task_data.get('git_branch') or 'Not created'}", classes="detail-row"),
+                Static(f"Worktree: {self.task_data.get('worktree_path') or 'Not created'}", classes="detail-row"),
+                Static(f"tmux Session: {self.task_data.get('tmux_session') or 'Not running'}", classes="detail-row"),
+                id="session-section"
+            ),
+        )
+
+    def _format_status(self, status: str) -> str:
+        """Format status with icon"""
+        status_icons = {
+            "queued": "⚪ QUEUED",
+            "running": "🟢 RUNNING",
+            "blocked": "🟡 BLOCKED",
+            "completed": "✅ COMPLETED",
+            "failed": "🔴 FAILED"
+        }
+        return status_icons.get(status, status.upper())
+
+    def _format_timestamp(self, timestamp) -> str:
+        """Format timestamp for display"""
+        if not timestamp:
+            return "Not set"
+
+        from datetime import datetime
+        try:
+            dt = datetime.fromtimestamp(timestamp)
+            return dt.strftime("%Y-%m-%d %H:%M:%S")
+        except (ValueError, TypeError):
+            return "Invalid"
+
+    def action_go_back(self) -> None:
+        """Go back to previous screen"""
+        self.app.pop_screen()
+
+    def action_edit_task(self) -> None:
+        """Open edit modal for this task"""
+        def check_result(result):
+            if result:
+                self.load_task_details()
+
+        self.app.push_screen(EditTaskModal(self.task_id), check_result)
+
+    def action_start_task(self) -> None:
+        """Open start modal to begin work on task"""
+        if self.task_data['status'] in ['running', 'completed']:
+            self.app.notify(f"Task is already {self.task_data['status']}", severity="warning")
+            return
+
+        def check_result(result):
+            if result:
+                self.load_task_details()
+
+        self.app.push_screen(StartTaskModal(self.task_id), check_result)
+
+    def action_complete_task(self) -> None:
+        """Mark task as completed"""
+        if self.task_data['status'] == 'completed':
+            self.app.notify("Task is already completed", severity="information")
+            return
+
+        from datetime import datetime
+        database.update_task_status(
+            self.task_id,
+            "completed",
+            completed_at=int(datetime.now().timestamp())
+        )
+        database.add_event(self.task_id, "completed")
+        self.app.notify(f"Task {self.task_id} marked as completed", severity="success")
+        self.load_task_details()
+
+    def action_delete_task(self) -> None:
+        """Delete this task with confirmation"""
+        # TODO: Add confirmation modal
+        database.delete_task(self.task_id)
+        database.add_event(self.task_id, "deleted")
+        self.app.notify(f"Task {self.task_id} deleted", severity="warning")
+        self.app.pop_screen()
 
 
 class ProjectListScreen(Screen):
@@ -804,7 +1241,7 @@ class AgentDashboard(App):
     }
 
     /* Modal styles */
-    #create-project-modal, #create-repo-modal, #edit-project-modal, #edit-repo-modal, #create-task-modal {
+    #create-project-modal, #create-repo-modal, #edit-project-modal, #edit-repo-modal, #create-task-modal, #edit-task-modal, #start-task-modal {
         align: center middle;
         width: 60;
         height: auto;
@@ -858,6 +1295,27 @@ class AgentDashboard(App):
         border: solid $accent;
         margin: 1;
         height: 1fr;
+    }
+
+    /* Task detail styles */
+    #task-detail-container {
+        height: 100%;
+        overflow-y: auto;
+    }
+
+    #task-detail-content {
+        height: auto;
+    }
+
+    #info-section, #project-section, #status-section, #timestamps-section, #session-section {
+        border: solid $accent;
+        margin: 1;
+        padding: 1;
+    }
+
+    .detail-row {
+        padding: 0 1;
+        margin-top: 0;
     }
     """
 
