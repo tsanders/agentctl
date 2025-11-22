@@ -170,25 +170,44 @@ def task_list(
 def task_create(
     task_id: str = typer.Argument(..., help="Task ID (e.g., RRA-API-0082)"),
     title: str = typer.Option(..., help="Task title"),
-    project: str = typer.Option(..., help="Project code"),
+    project_id: str = typer.Option(..., help="Project ID"),
     category: str = typer.Option("FEATURE", help="Category (FEATURE, BUG, REFACTOR)"),
     task_type: str = typer.Option("feature", help="Task type"),
     priority: TaskPriority = typer.Option(TaskPriority.MEDIUM, help="Priority level"),
     description: Optional[str] = typer.Option(None, help="Task description"),
+    repository_id: Optional[str] = typer.Option(None, help="Repository ID (optional)"),
 ):
     """Create a new task"""
+    # Verify project exists
+    project = database.get_project(project_id)
+    if not project:
+        console.print(f"[red]Error:[/red] Project '{project_id}' not found")
+        console.print(f"Create it first with: [cyan]agentctl project create {project_id}[/cyan]")
+        raise typer.Exit(1)
+
+    # Verify repository if provided
+    if repository_id:
+        repo = database.get_repository(repository_id)
+        if not repo:
+            console.print(f"[red]Error:[/red] Repository '{repository_id}' not found")
+            raise typer.Exit(1)
+
     database.create_task(
         task_id=task_id,
-        project=project,
+        project_id=project_id,
         category=category,
         task_type=task_type,
         title=title,
         description=description,
-        priority=priority.value
+        priority=priority.value,
+        repository_id=repository_id
     )
 
     console.print(f"✓ Task [cyan]{task_id}[/cyan] created")
     console.print(f"  Title: {title}")
+    console.print(f"  Project: {project['name']}")
+    if repository_id:
+        console.print(f"  Repository: {repository_id}")
     console.print(f"  Priority: [{priority.value}]{priority.value.upper()}[/{priority.value}]")
 
 
@@ -222,6 +241,131 @@ def agent_list():
             agent['phase'],
             agent['elapsed'],
             agent['tmux_session'] or "-"
+        )
+
+    console.print(table)
+
+
+# Project management commands
+project_app = typer.Typer(help="Project management commands")
+app.add_typer(project_app, name="project")
+
+
+@project_app.command("create")
+def project_create(
+    project_id: str = typer.Argument(..., help="Project ID (e.g., RRA)"),
+    name: str = typer.Option(..., help="Project name"),
+    description: Optional[str] = typer.Option(None, help="Project description"),
+):
+    """Create a new project"""
+    database.create_project(
+        project_id=project_id,
+        name=name,
+        description=description
+    )
+
+    console.print(f"✓ Project [cyan]{project_id}[/cyan] created")
+    console.print(f"  Name: {name}")
+    if description:
+        console.print(f"  Description: {description}")
+
+
+@project_app.command("list")
+def project_list():
+    """List all projects"""
+    projects = database.list_projects()
+
+    if not projects:
+        console.print("[yellow]No projects found[/yellow]")
+        console.print("Create one with: [cyan]agentctl project create PROJECT_ID --name 'Name'[/cyan]")
+        return
+
+    table = Table(show_header=True, header_style="bold magenta", box=box.ROUNDED)
+    table.add_column("Project ID", style="cyan")
+    table.add_column("Name", style="white")
+    table.add_column("Description", style="dim")
+
+    for project in projects:
+        table.add_row(
+            project['id'],
+            project['name'],
+            project.get('description') or "-"
+        )
+
+    console.print(table)
+
+
+# Repository management commands
+repo_app = typer.Typer(help="Repository management commands")
+app.add_typer(repo_app, name="repo")
+
+
+@repo_app.command("create")
+def repo_create(
+    repository_id: str = typer.Argument(..., help="Repository ID (e.g., RRA-API)"),
+    project_id: str = typer.Option(..., help="Project ID"),
+    name: str = typer.Option(..., help="Repository name"),
+    path: str = typer.Option(..., help="Path to repository"),
+    default_branch: str = typer.Option("main", help="Default branch name"),
+):
+    """Create a new repository"""
+    from pathlib import Path
+
+    # Verify project exists
+    project = database.get_project(project_id)
+    if not project:
+        console.print(f"[red]Error:[/red] Project '{project_id}' not found")
+        raise typer.Exit(1)
+
+    # Verify path exists
+    repo_path = Path(path).resolve()
+    if not repo_path.exists():
+        console.print(f"[red]Error:[/red] Path does not exist: {repo_path}")
+        raise typer.Exit(1)
+
+    database.create_repository(
+        repository_id=repository_id,
+        project_id=project_id,
+        name=name,
+        path=str(repo_path),
+        default_branch=default_branch
+    )
+
+    console.print(f"✓ Repository [cyan]{repository_id}[/cyan] created")
+    console.print(f"  Name: {name}")
+    console.print(f"  Project: {project['name']}")
+    console.print(f"  Path: {repo_path}")
+    console.print(f"  Default branch: {default_branch}")
+
+
+@repo_app.command("list")
+def repo_list(
+    project_id: Optional[str] = typer.Option(None, help="Filter by project ID"),
+):
+    """List repositories"""
+    repositories = database.list_repositories(project_id=project_id)
+
+    if not repositories:
+        console.print("[yellow]No repositories found[/yellow]")
+        console.print("Create one with: [cyan]agentctl repo create REPO_ID --project-id PROJECT_ID --name 'Name' --path /path/to/repo[/cyan]")
+        return
+
+    table = Table(show_header=True, header_style="bold magenta", box=box.ROUNDED)
+    table.add_column("Repository ID", style="cyan")
+    table.add_column("Name", style="white")
+    table.add_column("Project", style="yellow")
+    table.add_column("Path", style="dim")
+
+    for repo in repositories:
+        # Get project name
+        project = database.get_project(repo['project_id'])
+        project_name = project['name'] if project else repo['project_id']
+
+        table.add_row(
+            repo['id'],
+            repo['name'],
+            project_name,
+            repo['path']
         )
 
     console.print(table)

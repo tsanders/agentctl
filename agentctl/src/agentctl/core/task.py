@@ -21,12 +21,32 @@ class Task:
         if not task_data:
             raise ValueError(f"Task {self.task_id} not found")
 
-        self.project = task_data['project']
+        self.project_id = task_data['project_id']
+        self.repository_id = task_data.get('repository_id')
         self.category = task_data['category']
         self.title = task_data['title']
         self.status = task_data['status']
         self.priority = task_data['priority']
         self.phase = task_data.get('phase')
+
+        # Load project and repository details
+        project_data = database.get_project(self.project_id)
+        self.project_name = project_data['name'] if project_data else self.project_id
+
+        if self.repository_id:
+            repo_data = database.get_repository(self.repository_id)
+            if repo_data:
+                self.repository_path = Path(repo_data['path'])
+                self.repository_name = repo_data['name']
+                self.default_branch = repo_data.get('default_branch', 'main')
+            else:
+                self.repository_path = None
+                self.repository_name = None
+                self.default_branch = 'main'
+        else:
+            self.repository_path = None
+            self.repository_name = None
+            self.default_branch = 'main'
 
     @property
     def branch(self) -> str:
@@ -47,7 +67,9 @@ class Task:
     @property
     def workspace_dir(self) -> Path:
         """Workspace directory for this task"""
-        return Path.cwd()  # Use current directory for now
+        if self.repository_path:
+            return self.repository_path
+        return Path.cwd()  # Fallback to current directory
 
     @property
     def preferred_agent(self) -> Optional[str]:
@@ -63,11 +85,14 @@ def start_task(task_id: str, agent_type: Optional[str] = None, working_dir: Opti
     work_dir = working_dir or task.workspace_dir
     work_dir = Path(work_dir).resolve()
 
-    # Create git branch
-    try:
-        branch = create_branch(task.branch)
-    except Exception as e:
-        raise RuntimeError(f"Failed to create git branch: {e}")
+    # Create git branch (only if repository is configured)
+    if task.repository_path:
+        try:
+            branch = create_branch(task.branch, base=task.default_branch, repo_path=task.repository_path)
+        except Exception as e:
+            raise RuntimeError(f"Failed to create git branch in {task.repository_path}: {e}")
+    else:
+        branch = None
 
     # Create tmux session
     try:

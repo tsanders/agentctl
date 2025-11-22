@@ -18,9 +18,29 @@ def init_db():
     cursor = conn.cursor()
 
     cursor.executescript("""
+        CREATE TABLE IF NOT EXISTS projects (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT,
+            default_repository_id TEXT,
+            created_at INTEGER NOT NULL,
+            metadata TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS repositories (
+            id TEXT PRIMARY KEY,
+            project_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            path TEXT NOT NULL,
+            default_branch TEXT DEFAULT 'main',
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY (project_id) REFERENCES projects(id)
+        );
+
         CREATE TABLE IF NOT EXISTS tasks (
             id TEXT PRIMARY KEY,
-            project TEXT NOT NULL,
+            project_id TEXT NOT NULL,
+            repository_id TEXT,
             category TEXT NOT NULL,
             type TEXT NOT NULL,
             title TEXT NOT NULL,
@@ -35,7 +55,9 @@ def init_db():
             git_branch TEXT,
             agent_type TEXT,
             commits INTEGER DEFAULT 0,
-            metadata TEXT
+            metadata TEXT,
+            FOREIGN KEY (project_id) REFERENCES projects(id),
+            FOREIGN KEY (repository_id) REFERENCES repositories(id)
         );
 
         CREATE TABLE IF NOT EXISTS events (
@@ -58,8 +80,10 @@ def init_db():
 
         CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
         CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority);
+        CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
         CREATE INDEX IF NOT EXISTS idx_events_task ON events(task_id);
         CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);
+        CREATE INDEX IF NOT EXISTS idx_repositories_project ON repositories(project_id);
     """)
 
     conn.commit()
@@ -83,17 +107,18 @@ def get_active_agents() -> List[Dict]:
 
     cursor.execute("""
         SELECT
-            id as task_id,
-            project,
-            status,
-            phase,
-            agent_type,
-            commits,
-            tmux_session,
-            CAST((julianday('now') - julianday(started_at, 'unixepoch')) * 24 * 60 AS INTEGER) as elapsed_minutes
-        FROM tasks
-        WHERE status IN ('running', 'blocked')
-        ORDER BY started_at DESC
+            t.id as task_id,
+            p.name as project,
+            t.status,
+            t.phase,
+            t.agent_type,
+            t.commits,
+            t.tmux_session,
+            CAST((julianday('now') - julianday(t.started_at, 'unixepoch')) * 24 * 60 AS INTEGER) as elapsed_minutes
+        FROM tasks t
+        LEFT JOIN projects p ON t.project_id = p.id
+        WHERE t.status IN ('running', 'blocked')
+        ORDER BY t.started_at DESC
     """)
 
     agents = []
@@ -121,16 +146,17 @@ def get_queued_tasks() -> List[Dict]:
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT id, project, category, priority, title
-        FROM tasks
-        WHERE status = 'queued'
+        SELECT t.id, p.name as project, t.category, t.priority, t.title
+        FROM tasks t
+        LEFT JOIN projects p ON t.project_id = p.id
+        WHERE t.status = 'queued'
         ORDER BY
-            CASE priority
+            CASE t.priority
                 WHEN 'high' THEN 1
                 WHEN 'medium' THEN 2
                 WHEN 'low' THEN 3
             END,
-            created_at ASC
+            t.created_at ASC
     """)
 
     tasks = [dict(row) for row in cursor.fetchall()]
@@ -228,21 +254,22 @@ def get_recent_events(limit: int = 10) -> List[Dict]:
 
 def create_task(
     task_id: str,
-    project: str,
+    project_id: str,
     category: str,
     task_type: str,
     title: str,
     description: Optional[str] = None,
-    priority: str = "medium"
+    priority: str = "medium",
+    repository_id: Optional[str] = None
 ) -> None:
     """Create a new task in the database"""
     conn = get_connection()
     cursor = conn.cursor()
 
     cursor.execute("""
-        INSERT INTO tasks (id, project, category, type, title, description, priority, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (task_id, project, category, task_type, title, description, priority, int(datetime.now().timestamp())))
+        INSERT INTO tasks (id, project_id, repository_id, category, type, title, description, priority, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (task_id, project_id, repository_id, category, task_type, title, description, priority, int(datetime.now().timestamp())))
 
     conn.commit()
     conn.close()
@@ -279,3 +306,101 @@ def update_task_status(task_id: str, status: str, **kwargs):
 
     conn.commit()
     conn.close()
+
+
+# Project management functions
+
+def create_project(
+    project_id: str,
+    name: str,
+    description: Optional[str] = None
+) -> None:
+    """Create a new project"""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        INSERT INTO projects (id, name, description, created_at)
+        VALUES (?, ?, ?, ?)
+    """, (project_id, name, description, int(datetime.now().timestamp())))
+
+    conn.commit()
+    conn.close()
+
+
+def get_project(project_id: str) -> Optional[Dict]:
+    """Get a project by ID"""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT * FROM projects WHERE id = ?", (project_id,))
+    row = cursor.fetchone()
+    conn.close()
+
+    return dict(row) if row else None
+
+
+def list_projects() -> List[Dict]:
+    """List all projects"""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT * FROM projects ORDER BY created_at DESC")
+    projects = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+
+    return projects
+
+
+# Repository management functions
+
+def create_repository(
+    repository_id: str,
+    project_id: str,
+    name: str,
+    path: str,
+    default_branch: str = "main"
+) -> None:
+    """Create a new repository"""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        INSERT INTO repositories (id, project_id, name, path, default_branch, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (repository_id, project_id, name, path, default_branch, int(datetime.now().timestamp())))
+
+    conn.commit()
+    conn.close()
+
+
+def get_repository(repository_id: str) -> Optional[Dict]:
+    """Get a repository by ID"""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT * FROM repositories WHERE id = ?", (repository_id,))
+    row = cursor.fetchone()
+    conn.close()
+
+    return dict(row) if row else None
+
+
+def list_repositories(project_id: Optional[str] = None) -> List[Dict]:
+    """List repositories, optionally filtered by project"""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    if project_id:
+        cursor.execute("""
+            SELECT * FROM repositories
+            WHERE project_id = ?
+            ORDER BY created_at DESC
+        """, (project_id,))
+    else:
+        cursor.execute("SELECT * FROM repositories ORDER BY created_at DESC")
+
+    repositories = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+
+    return repositories

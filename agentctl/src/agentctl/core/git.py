@@ -12,9 +12,9 @@ def get_repo(path: Optional[Path] = None) -> git.Repo:
     return git.Repo(path, search_parent_directories=True)
 
 
-def create_branch(branch_name: str, base: str = "main") -> str:
+def create_branch(branch_name: str, base: str = "main", repo_path: Optional[Path] = None) -> str:
     """Create a new git branch"""
-    repo = get_repo()
+    repo = get_repo(repo_path)
 
     # Check if branch exists
     if branch_name in repo.heads:
