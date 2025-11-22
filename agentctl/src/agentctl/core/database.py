@@ -177,27 +177,28 @@ def query_tasks(
     params = []
 
     if status:
-        conditions.append("status = ?")
+        conditions.append("t.status = ?")
         params.append(status)
     if priority:
-        conditions.append("priority = ?")
+        conditions.append("t.priority = ?")
         params.append(priority)
     if project:
-        conditions.append("project = ?")
+        conditions.append("t.project_id = ?")
         params.append(project)
 
     where_clause = " AND ".join(conditions) if conditions else "1=1"
 
     cursor.execute(f"""
         SELECT
-            id as task_id,
-            status,
-            priority,
-            phase,
-            CAST((julianday('now') - julianday(started_at, 'unixepoch')) * 24 * 60 AS INTEGER) as waiting_minutes
-        FROM tasks
+            t.id as task_id,
+            t.title,
+            t.status,
+            t.priority,
+            t.phase,
+            CAST((julianday('now') - julianday(t.started_at, 'unixepoch')) * 24 * 60 AS INTEGER) as waiting_minutes
+        FROM tasks t
         WHERE {where_clause}
-        ORDER BY created_at DESC
+        ORDER BY t.created_at DESC
     """, params)
 
     tasks = []
