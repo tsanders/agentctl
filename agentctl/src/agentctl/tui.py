@@ -359,13 +359,13 @@ class CreateTaskModal(ModalScreen):
         self.repository_id = repository_id
 
     def compose(self) -> ComposeResult:
-        # Get projects for dropdown
+        # Get projects for dropdown (label, value) format
         projects = database.list_projects()
-        project_options = [(p['id'], p['name']) for p in projects]
+        project_options = [(p['name'], p['id']) for p in projects]
 
-        # Get repositories for dropdown
+        # Get repositories for dropdown (label, value) format
         repositories = database.list_repositories()
-        repo_options = [(r['id'], r['name']) for r in repositories]
+        repo_options = [(r['name'], r['id']) for r in repositories]
 
         yield Container(
             Label("Create New Task", id="modal-title"),
@@ -387,12 +387,12 @@ class CreateTaskModal(ModalScreen):
             ),
             Select(
                 options=[
-                    ("FEATURE", "Feature"),
-                    ("BUG", "Bug"),
-                    ("REFACTOR", "Refactor"),
-                    ("DOCS", "Documentation"),
-                    ("TEST", "Test"),
-                    ("CHORE", "Chore")
+                    ("Feature", "FEATURE"),
+                    ("Bug", "BUG"),
+                    ("Refactor", "REFACTOR"),
+                    ("Documentation", "DOCS"),
+                    ("Test", "TEST"),
+                    ("Chore", "CHORE")
                 ],
                 prompt="Category",
                 id="task-category",
@@ -401,9 +401,9 @@ class CreateTaskModal(ModalScreen):
             Input(placeholder="Type (e.g., feature, bugfix)", id="task-type", value="feature"),
             Select(
                 options=[
-                    ("high", "High"),
-                    ("medium", "Medium"),
-                    ("low", "Low")
+                    ("High", "high"),
+                    ("Medium", "medium"),
+                    ("Low", "low")
                 ],
                 prompt="Priority",
                 id="task-priority",
