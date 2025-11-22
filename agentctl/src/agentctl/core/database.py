@@ -353,6 +353,41 @@ def list_projects() -> List[Dict]:
     return projects
 
 
+def update_project(
+    project_id: str,
+    name: Optional[str] = None,
+    description: Optional[str] = None,
+    default_repository_id: Optional[str] = None
+) -> None:
+    """Update project fields (only provided fields are updated)"""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    updates = []
+    params = []
+
+    if name is not None:
+        updates.append("name = ?")
+        params.append(name)
+    if description is not None:
+        updates.append("description = ?")
+        params.append(description)
+    if default_repository_id is not None:
+        updates.append("default_repository_id = ?")
+        params.append(default_repository_id)
+
+    if not updates:
+        conn.close()
+        return
+
+    params.append(project_id)
+    query = f"UPDATE projects SET {', '.join(updates)} WHERE id = ?"
+    cursor.execute(query, params)
+
+    conn.commit()
+    conn.close()
+
+
 # Repository management functions
 
 def create_repository(
@@ -405,3 +440,38 @@ def list_repositories(project_id: Optional[str] = None) -> List[Dict]:
     conn.close()
 
     return repositories
+
+
+def update_repository(
+    repository_id: str,
+    name: Optional[str] = None,
+    path: Optional[str] = None,
+    default_branch: Optional[str] = None
+) -> None:
+    """Update repository fields (only provided fields are updated)"""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    updates = []
+    params = []
+
+    if name is not None:
+        updates.append("name = ?")
+        params.append(name)
+    if path is not None:
+        updates.append("path = ?")
+        params.append(path)
+    if default_branch is not None:
+        updates.append("default_branch = ?")
+        params.append(default_branch)
+
+    if not updates:
+        conn.close()
+        return
+
+    params.append(repository_id)
+    query = f"UPDATE repositories SET {', '.join(updates)} WHERE id = ?"
+    cursor.execute(query, params)
+
+    conn.commit()
+    conn.close()

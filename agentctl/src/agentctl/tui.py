@@ -188,6 +188,55 @@ class CreateProjectModal(ModalScreen):
                 self.app.notify(f"Error creating project: {e}", severity="error")
 
 
+class EditProjectModal(ModalScreen):
+    """Modal for editing an existing project"""
+
+    def __init__(self, project_id: str):
+        super().__init__()
+        self.project_id = project_id
+        self.project_data = database.get_project(project_id)
+
+    def compose(self) -> ComposeResult:
+        yield Container(
+            Label(f"Edit Project: {self.project_id}", id="modal-title"),
+            Input(placeholder="Project Name", id="project-name", value=self.project_data['name']),
+            Input(placeholder="Description (optional)", id="project-desc",
+                  value=self.project_data.get('description') or ""),
+            Input(placeholder="Default Repository ID (optional)", id="default-repo-id",
+                  value=self.project_data.get('default_repository_id') or ""),
+            Horizontal(
+                Button("Save", variant="primary", id="save-btn"),
+                Button("Cancel", variant="default", id="cancel-btn"),
+                classes="button-row"
+            ),
+            id="edit-project-modal"
+        )
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "cancel-btn":
+            self.dismiss(None)
+        elif event.button.id == "save-btn":
+            project_name = self.query_one("#project-name", Input).value
+            project_desc = self.query_one("#project-desc", Input).value
+            default_repo = self.query_one("#default-repo-id", Input).value
+
+            if not project_name:
+                self.app.notify("Project Name is required", severity="error")
+                return
+
+            try:
+                database.update_project(
+                    project_id=self.project_id,
+                    name=project_name.strip(),
+                    description=project_desc.strip() if project_desc else None,
+                    default_repository_id=default_repo.strip() if default_repo else None
+                )
+                self.dismiss(self.project_id)
+                self.app.notify(f"Project {self.project_id} updated!", severity="success")
+            except Exception as e:
+                self.app.notify(f"Error updating project: {e}", severity="error")
+
+
 class CreateRepositoryModal(ModalScreen):
     """Modal for creating a new repository"""
 
@@ -245,12 +294,69 @@ class CreateRepositoryModal(ModalScreen):
                 self.app.notify(f"Error creating repository: {e}", severity="error")
 
 
+class EditRepositoryModal(ModalScreen):
+    """Modal for editing an existing repository"""
+
+    def __init__(self, repository_id: str):
+        super().__init__()
+        self.repository_id = repository_id
+        self.repo_data = database.get_repository(repository_id)
+
+    def compose(self) -> ComposeResult:
+        yield Container(
+            Label(f"Edit Repository: {self.repository_id}", id="modal-title"),
+            Input(placeholder="Repository Name", id="repo-name", value=self.repo_data['name']),
+            Input(placeholder="Path to repository", id="repo-path", value=self.repo_data['path']),
+            Input(placeholder="Default branch", id="repo-branch",
+                  value=self.repo_data.get('default_branch') or "main"),
+            Horizontal(
+                Button("Save", variant="primary", id="save-btn"),
+                Button("Cancel", variant="default", id="cancel-btn"),
+                classes="button-row"
+            ),
+            id="edit-repo-modal"
+        )
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "cancel-btn":
+            self.dismiss(None)
+        elif event.button.id == "save-btn":
+            from pathlib import Path
+
+            repo_name = self.query_one("#repo-name", Input).value
+            repo_path = self.query_one("#repo-path", Input).value
+            repo_branch = self.query_one("#repo-branch", Input).value
+
+            if not repo_name or not repo_path:
+                self.app.notify("Name and Path are required", severity="error")
+                return
+
+            # Validate path exists
+            path = Path(repo_path).expanduser().resolve()
+            if not path.exists():
+                self.app.notify(f"Path does not exist: {path}", severity="error")
+                return
+
+            try:
+                database.update_repository(
+                    repository_id=self.repository_id,
+                    name=repo_name.strip(),
+                    path=str(path),
+                    default_branch=repo_branch.strip() or "main"
+                )
+                self.dismiss(self.repository_id)
+                self.app.notify(f"Repository {self.repository_id} updated!", severity="success")
+            except Exception as e:
+                self.app.notify(f"Error updating repository: {e}", severity="error")
+
+
 class ProjectDetailScreen(Screen):
     """Screen showing project details with repositories and tasks"""
 
     BINDINGS = [
         ("escape", "go_back", "Back"),
         ("r", "add_repo", "Add Repo"),
+        ("e", "edit_repo", "Edit Repo"),
         ("q", "quit", "Quit"),
     ]
 
@@ -326,6 +432,23 @@ class ProjectDetailScreen(Screen):
 
         self.app.push_screen(CreateRepositoryModal(self.project_id), check_result)
 
+    def action_edit_repo(self) -> None:
+        """Show modal to edit selected repository"""
+        repos_table = self.query_one("#repos-table", DataTable)
+
+        # Check if repos table has focus and a selected row
+        if repos_table.has_focus and repos_table.row_count > 0 and repos_table.cursor_row is not None:
+            row = repos_table.get_row_at(repos_table.cursor_row)
+            repository_id = str(row[0])
+
+            def check_result(result):
+                if result:
+                    self.load_repositories()
+
+            self.app.push_screen(EditRepositoryModal(repository_id), check_result)
+        else:
+            self.app.notify("Select a repository to edit", severity="warning")
+
 
 class ProjectListScreen(Screen):
     """Screen showing all projects"""
@@ -333,6 +456,7 @@ class ProjectListScreen(Screen):
     BINDINGS = [
         ("escape", "go_back", "Back"),
         ("n", "new_project", "New Project"),
+        ("e", "edit_project", "Edit Project"),
         ("q", "quit", "Quit"),
     ]
 
@@ -384,6 +508,19 @@ class ProjectListScreen(Screen):
                 self.load_projects()
 
         self.app.push_screen(CreateProjectModal(), check_result)
+
+    def action_edit_project(self) -> None:
+        """Show modal to edit selected project"""
+        table = self.query_one("#projects-table", DataTable)
+        if table.row_count > 0 and table.cursor_row is not None:
+            row = table.get_row_at(table.cursor_row)
+            project_id = str(row[0])
+
+            def check_result(result):
+                if result:
+                    self.load_projects()
+
+            self.app.push_screen(EditProjectModal(project_id), check_result)
 
     def action_select_project(self) -> None:
         """Open selected project details"""
@@ -452,7 +589,7 @@ class AgentDashboard(App):
     }
 
     /* Modal styles */
-    #create-project-modal, #create-repo-modal {
+    #create-project-modal, #create-repo-modal, #edit-project-modal, #edit-repo-modal {
         align: center middle;
         width: 60;
         height: auto;
