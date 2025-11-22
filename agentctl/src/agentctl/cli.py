@@ -40,6 +40,13 @@ def init():
 
 
 @app.command()
+def dash():
+    """Launch interactive TUI dashboard"""
+    from agentctl.tui import run_dashboard
+    run_dashboard()
+
+
+@app.command()
 def status():
     """Show quick status of all agents"""
     agents = database.get_active_agents()

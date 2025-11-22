@@ -54,7 +54,15 @@ uv run agentctl agent list
 ### Core Commands
 
 - `agentctl init` - Initialize the database
+- `agentctl dash` - Launch interactive TUI dashboard (real-time monitoring!)
 - `agentctl status` - Show quick status of all agents
+
+### Project & Repository Management
+
+- `agentctl project create` - Create a new project
+- `agentctl project list` - List all projects
+- `agentctl repo create` - Register a git repository for a project
+- `agentctl repo list` - List repositories
 
 ### Task Management
 
@@ -65,6 +73,23 @@ uv run agentctl agent list
 ### Agent Management
 
 - `agentctl agent list` - List all active agents
+
+## TUI Dashboard
+
+Launch the interactive dashboard with `agentctl dash`:
+
+**Features:**
+- 🤖 **Active Agents** - Real-time view of running agents with status, phase, elapsed time, and commits
+- 📋 **Task Queue** - See queued tasks by priority
+- 📊 **Recent Activity** - Live activity log showing events (starts, completions, commits)
+- 📈 **Project Stats** - Overview of projects, agents, and task counts
+- ⌨️ **Keyboard Shortcuts:**
+  - `r` - Refresh all widgets
+  - `s` - Show status notification
+  - `p` - Show projects info
+  - `q` - Quit dashboard
+
+The dashboard auto-updates every few seconds to show live agent activity!
 
 ## How It Works
 
@@ -114,16 +139,19 @@ ruff check src/
 ## Roadmap
 
 - [x] Basic task management
-- [x] Git integration
+- [x] Project & repository management
+- [x] Git integration (per-repository)
 - [x] tmux session management
 - [x] Agent status tracking
+- [x] TUI dashboard with real-time updates
 - [ ] Task pause/resume
 - [ ] Obsidian sync integration
-- [ ] TUI dashboard
 - [ ] Background daemon
-- [ ] Notification system
+- [ ] Notification system (desktop, webhooks)
 - [ ] Review workflow
 - [ ] Statistics and analytics
+- [ ] Agent attach from TUI
+- [ ] Task detail view in TUI
 
 ## License
 
