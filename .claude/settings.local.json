@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(superpowers:brainstorming)",
+      "Bash(source .venv/bin/activate)",
+      "Bash(agentctl --help:*)",
+      "Bash(source agentctl/.venv/bin/activate)",
+      "Bash(python -m agentctl.cli:*)",
+      "Bash(tmux ls:*)",
+      "Bash(/usr/local/bin/tmux ls:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
