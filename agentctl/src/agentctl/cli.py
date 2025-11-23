@@ -175,7 +175,7 @@ def task_list(
 
 @task_app.command("create")
 def task_create(
-    task_id: str = typer.Argument(..., help="Task ID (e.g., RRA-API-0082)"),
+    task_id: Optional[str] = typer.Argument(None, help="Task ID (auto-generated for markdown tasks)"),
     title: str = typer.Option(..., help="Task title"),
     project_id: str = typer.Option(..., help="Project ID"),
     category: str = typer.Option("FEATURE", help="Category (FEATURE, BUG, REFACTOR)"),
@@ -185,6 +185,8 @@ def task_create(
     repository_id: Optional[str] = typer.Option(None, help="Repository ID (optional)"),
 ):
     """Create a new task"""
+    from agentctl.core.task import create_markdown_task
+
     # Verify project exists
     project = database.get_project(project_id)
     if not project:
@@ -199,20 +201,48 @@ def task_create(
             console.print(f"[red]Error:[/red] Repository '{repository_id}' not found")
             raise typer.Exit(1)
 
-    database.create_task(
-        task_id=task_id,
-        project_id=project_id,
-        category=category,
-        task_type=task_type,
-        title=title,
-        description=description,
-        priority=priority.value,
-        repository_id=repository_id
-    )
+    # Check if project uses markdown tasks
+    if project.get('tasks_path'):
+        # Create markdown task (ID will be auto-generated)
+        actual_task_id = create_markdown_task(
+            project_id=project_id,
+            category=category,
+            title=title,
+            description=description,
+            repository_id=repository_id,
+            task_type=task_type,
+            priority=priority.value
+        )
+        if not actual_task_id:
+            console.print("[red]Error:[/red] Failed to create markdown task")
+            raise typer.Exit(1)
 
-    console.print(f"✓ Task [cyan]{task_id}[/cyan] created")
-    console.print(f"  Title: {title}")
-    console.print(f"  Project: {project['name']}")
+        console.print(f"✓ Markdown task [cyan]{actual_task_id}[/cyan] created")
+        console.print(f"  Title: {title}")
+        console.print(f"  Project: {project['name']}")
+        console.print(f"  File: {project['tasks_path']}/{actual_task_id}.md")
+    else:
+        # Create database task (user must provide ID)
+        if not task_id:
+            console.print("[red]Error:[/red] Task ID is required for database tasks")
+            console.print("Either provide a task ID or configure tasks_path for the project")
+            raise typer.Exit(1)
+
+        database.create_task(
+            task_id=task_id,
+            project_id=project_id,
+            category=category,
+            task_type=task_type,
+            title=title,
+            description=description,
+            priority=priority.value,
+            repository_id=repository_id
+        )
+
+        console.print(f"✓ Task [cyan]{task_id}[/cyan] created")
+        console.print(f"  Title: {title}")
+        console.print(f"  Project: {project['name']}")
+
     if repository_id:
         console.print(f"  Repository: {repository_id}")
     console.print(f"  Priority: [{priority.value}]{priority.value.upper()}[/{priority.value}]")

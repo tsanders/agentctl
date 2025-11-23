@@ -7,8 +7,10 @@ from textual.reactive import reactive
 from textual.screen import Screen, ModalScreen
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple
+from pathlib import Path
 
-from agentctl.core import database
+from agentctl.core import database, task_sync, task_md
+from agentctl.core.task import create_markdown_task, update_markdown_task, delete_markdown_task
 
 
 class AgentStatusWidget(Static):
@@ -156,6 +158,7 @@ class CreateProjectModal(ModalScreen):
             Input(placeholder="Project ID (e.g., RRA)", id="project-id"),
             Input(placeholder="Project Name", id="project-name"),
             Input(placeholder="Description (optional)", id="project-desc"),
+            Input(placeholder="Tasks Path (optional, for markdown tasks)", id="project-tasks-path"),
             Horizontal(
                 Button("Create", variant="primary", id="create-btn"),
                 Button("Cancel", variant="default", id="cancel-btn"),
@@ -171,19 +174,37 @@ class CreateProjectModal(ModalScreen):
             project_id = self.query_one("#project-id", Input).value
             project_name = self.query_one("#project-name", Input).value
             project_desc = self.query_one("#project-desc", Input).value
+            tasks_path = self.query_one("#project-tasks-path", Input).value
 
             if not project_id or not project_name:
                 self.app.notify("Project ID and Name are required", severity="error")
                 return
 
+            # Validate and create tasks_path if provided
+            final_tasks_path = None
+            if tasks_path and tasks_path.strip():
+                path = Path(tasks_path.strip()).expanduser().resolve()
+                if not path.exists():
+                    try:
+                        path.mkdir(parents=True, exist_ok=True)
+                        self.app.notify(f"Created tasks directory: {path}", severity="information")
+                    except Exception as e:
+                        self.app.notify(f"Failed to create directory: {e}", severity="error")
+                        return
+                final_tasks_path = str(path)
+
             try:
                 database.create_project(
                     project_id=project_id.strip(),
                     name=project_name.strip(),
-                    description=project_desc.strip() if project_desc else None
+                    description=project_desc.strip() if project_desc else None,
+                    tasks_path=final_tasks_path
                 )
                 self.dismiss(project_id)
-                self.app.notify(f"Project {project_id} created!", severity="success")
+                msg = f"Project {project_id} created"
+                if final_tasks_path:
+                    msg += f" with markdown tasks at {final_tasks_path}"
+                self.app.notify(msg, severity="success")
             except Exception as e:
                 self.app.notify(f"Error creating project: {e}", severity="error")
 
@@ -204,6 +225,8 @@ class EditProjectModal(ModalScreen):
                   value=self.project_data.get('description') or ""),
             Input(placeholder="Default Repository ID (optional)", id="default-repo-id",
                   value=self.project_data.get('default_repository_id') or ""),
+            Input(placeholder="Tasks Path (optional, for markdown tasks)", id="project-tasks-path",
+                  value=self.project_data.get('tasks_path') or ""),
             Horizontal(
                 Button("Save", variant="primary", id="save-btn"),
                 Button("Cancel", variant="default", id="cancel-btn"),
@@ -219,17 +242,32 @@ class EditProjectModal(ModalScreen):
             project_name = self.query_one("#project-name", Input).value
             project_desc = self.query_one("#project-desc", Input).value
             default_repo = self.query_one("#default-repo-id", Input).value
+            tasks_path = self.query_one("#project-tasks-path", Input).value
 
             if not project_name:
                 self.app.notify("Project Name is required", severity="error")
                 return
+
+            # Validate and create tasks_path if provided
+            final_tasks_path = None
+            if tasks_path and tasks_path.strip():
+                path = Path(tasks_path.strip()).expanduser().resolve()
+                if not path.exists():
+                    try:
+                        path.mkdir(parents=True, exist_ok=True)
+                        self.app.notify(f"Created tasks directory: {path}", severity="information")
+                    except Exception as e:
+                        self.app.notify(f"Failed to create directory: {e}", severity="error")
+                        return
+                final_tasks_path = str(path)
 
             try:
                 database.update_project(
                     project_id=self.project_id,
                     name=project_name.strip(),
                     description=project_desc.strip() if project_desc else None,
-                    default_repository_id=default_repo.strip() if default_repo else None
+                    default_repository_id=default_repo.strip() if default_repo else None,
+                    tasks_path=final_tasks_path
                 )
                 self.dismiss(self.project_id)
                 self.app.notify(f"Project {self.project_id} updated!", severity="success")
@@ -440,18 +478,38 @@ class CreateTaskModal(ModalScreen):
                 if repo_id and repo_id != Select.BLANK:
                     final_repo_id = repo_id
 
-                database.create_task(
-                    task_id=task_id.strip(),
-                    project_id=project_id,
-                    category=category,
-                    task_type=task_type.strip() or "feature",
-                    title=title.strip(),
-                    description=description.strip() if description else None,
-                    priority=priority,
-                    repository_id=final_repo_id
-                )
-                self.dismiss(task_id)
-                self.app.notify(f"Task {task_id} created!", severity="success")
+                # Check if project uses markdown tasks
+                project = database.get_project(project_id)
+                if project and project.get('tasks_path'):
+                    # Create markdown task (task_id will be auto-generated)
+                    actual_task_id = create_markdown_task(
+                        project_id=project_id,
+                        category=category,
+                        title=title.strip(),
+                        description=description.strip() if description else None,
+                        repository_id=final_repo_id,
+                        task_type=task_type.strip() or "feature",
+                        priority=priority
+                    )
+                    if actual_task_id:
+                        self.dismiss(actual_task_id)
+                        self.app.notify(f"Markdown task {actual_task_id} created!", severity="success")
+                    else:
+                        self.app.notify("Failed to create markdown task", severity="error")
+                else:
+                    # Create database task
+                    database.create_task(
+                        task_id=task_id.strip(),
+                        project_id=project_id,
+                        category=category,
+                        task_type=task_type.strip() or "feature",
+                        title=title.strip(),
+                        description=description.strip() if description else None,
+                        priority=priority,
+                        repository_id=final_repo_id
+                    )
+                    self.dismiss(task_id)
+                    self.app.notify(f"Task {task_id} created!", severity="success")
             except Exception as e:
                 self.app.notify(f"Error creating task: {e}", severity="error")
 
@@ -580,17 +638,38 @@ class EditTaskModal(ModalScreen):
                 if repo_id and repo_id != Select.BLANK:
                     final_repo_id = repo_id
 
-                database.update_task(
-                    self.task_id,
-                    title=title.strip(),
-                    description=description.strip() if description else None,
-                    project_id=project_id,
-                    repository_id=final_repo_id,
-                    category=category,
-                    type=task_type.strip(),
-                    priority=priority,
-                    status=status
-                )
+                # Check if this is a markdown task
+                task_source = self.task_data.get('source', 'database')
+                if task_source == 'markdown':
+                    # Update markdown task
+                    updates = {
+                        'title': title.strip(),
+                        'description': description.strip() if description else None,
+                        'project_id': project_id,
+                        'repository_id': final_repo_id,
+                        'category': category,
+                        'type': task_type.strip(),
+                        'priority': priority,
+                        'status': status
+                    }
+                    success = update_markdown_task(self.task_id, updates)
+                    if not success:
+                        self.app.notify("Failed to update markdown task", severity="error")
+                        return
+                else:
+                    # Update database task
+                    database.update_task(
+                        self.task_id,
+                        title=title.strip(),
+                        description=description.strip() if description else None,
+                        project_id=project_id,
+                        repository_id=final_repo_id,
+                        category=category,
+                        type=task_type.strip(),
+                        priority=priority,
+                        status=status
+                    )
+
                 database.add_event(self.task_id, "updated")
                 self.dismiss(self.task_id)
                 self.app.notify(f"Task {self.task_id} updated!", severity="success")
@@ -685,12 +764,23 @@ class StartTaskModal(ModalScreen):
                     pass
 
             try:
-                # Update task status to running
-                database.update_task_status(
-                    self.task_id,
-                    "running",
-                    started_at=int(datetime.now().timestamp())
-                )
+                # Check if this is a markdown task
+                task_source = self.task_data.get('source', 'database')
+                if task_source == 'markdown':
+                    # Update markdown task status
+                    from datetime import datetime as dt
+                    updates = {
+                        'status': 'running',
+                        'started_at': dt.now().isoformat()
+                    }
+                    update_markdown_task(self.task_id, updates)
+                else:
+                    # Update database task status
+                    database.update_task_status(
+                        self.task_id,
+                        "running",
+                        started_at=int(datetime.now().timestamp())
+                    )
 
                 # Create worktree if requested
                 if create_worktree and self.task_data.get('repository_path'):
@@ -707,11 +797,17 @@ class StartTaskModal(ModalScreen):
                     )
 
                     # Update task with worktree and branch info
-                    database.update_task(
-                        self.task_id,
-                        git_branch=worktree_info['branch_name'],
-                        worktree_path=worktree_info['worktree_path']
-                    )
+                    if task_source == 'markdown':
+                        update_markdown_task(self.task_id, {
+                            'git_branch': worktree_info['branch_name'],
+                            'worktree_path': worktree_info['worktree_path']
+                        })
+                    else:
+                        database.update_task(
+                            self.task_id,
+                            git_branch=worktree_info['branch_name'],
+                            worktree_path=worktree_info['worktree_path']
+                        )
 
                     self.app.notify(
                         f"Task started with worktree at {worktree_info['worktree_path']}",
@@ -858,7 +954,19 @@ class TaskManagementScreen(Screen):
         yield Footer()
 
     def on_mount(self) -> None:
+        # Sync markdown tasks before loading
+        self._sync_markdown_tasks()
         self.load_tasks()
+
+    def _sync_markdown_tasks(self) -> None:
+        """Sync all markdown tasks from projects"""
+        try:
+            results = task_sync.sync_all_tasks()
+            total_synced = sum(r.synced_count for r in results.values())
+            if total_synced > 0:
+                self.app.notify(f"Synced {total_synced} markdown tasks", severity="information")
+        except Exception as e:
+            self.app.notify(f"Sync error: {e}", severity="warning")
 
     def load_tasks(self) -> None:
         """Load and display all tasks"""
@@ -866,10 +974,14 @@ class TaskManagementScreen(Screen):
 
         table = self.query_one("#tasks-table", DataTable)
         table.clear()
-        table.add_columns("Task ID", "Project", "Repository", "Title", "Status", "Priority")
+        table.add_columns("Source", "Task ID", "Project", "Repository", "Title", "Status", "Priority")
         table.cursor_type = "row"
 
         for task in tasks:
+            # Source indicator
+            source = task.get('source', 'database')
+            source_label = "[MD]" if source == 'markdown' else "[DB]"
+
             status_icon = {
                 "queued": "⚪",
                 "running": "🟢",
@@ -885,6 +997,7 @@ class TaskManagementScreen(Screen):
             }.get(task.get('priority', 'medium'), "⚪")
 
             table.add_row(
+                source_label,
                 task['task_id'],
                 task.get('project_name', '-')[:20],
                 task.get('repository_name', '-')[:15] if task.get('repository_name') else '-',
