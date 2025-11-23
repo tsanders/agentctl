@@ -1044,15 +1044,29 @@ class TaskManagementScreen(Screen):
                         task_file = Path(project['tasks_path']) / f"{task_id}.md"
 
                         if task_file.exists():
-                            # Suspend TUI, open nvim, then resume and sync
+                            # Define callback to sync and reload after nvim closes
+                            def after_nvim():
+                                # Sync the changes after editing
+                                task_sync.sync_project_tasks(task['project_id'])
+                                # Reload the task list to show updated data
+                                self.load_tasks()
+                                self.app.notify(f"Task {task_id} updated", severity="success")
+
+                            # Suspend TUI and open nvim
                             import subprocess
-                            self.app.suspend()
-                            subprocess.run(['nvim', str(task_file)])
-                            # Sync the changes after editing
-                            task_sync.sync_project_tasks(task['project_id'])
-                            # Reload the task list to show updated data
-                            self.load_tasks()
-                            self.app.notify(f"Task {task_id} updated", severity="success")
+                            import os
+
+                            # Store the callback for after resume
+                            self._after_resume_callback = after_nvim
+
+                            # Exit TUI, run nvim, then re-enter
+                            with self.app.suspend():
+                                subprocess.run(['nvim', str(task_file)])
+
+                            # Execute callback
+                            if hasattr(self, '_after_resume_callback'):
+                                self._after_resume_callback()
+                                delattr(self, '_after_resume_callback')
                         else:
                             self.app.notify(f"Task file not found: {task_file}", severity="error")
                     else:
@@ -1211,15 +1225,28 @@ class TaskDetailScreen(Screen):
                 task_file = Path(project['tasks_path']) / f"{self.task_id}.md"
 
                 if task_file.exists():
-                    # Suspend TUI, open nvim, then resume and sync
+                    # Define callback to sync and reload after nvim closes
+                    def after_nvim():
+                        # Sync the changes after editing
+                        task_sync.sync_project_tasks(self.task_data['project_id'])
+                        # Reload the task details to show updated data
+                        self.load_task_details()
+                        self.app.notify(f"Task {self.task_id} updated", severity="success")
+
+                    # Suspend TUI and open nvim
                     import subprocess
-                    self.app.suspend()
-                    subprocess.run(['nvim', str(task_file)])
-                    # Sync the changes after editing
-                    task_sync.sync_project_tasks(self.task_data['project_id'])
-                    # Reload the task details to show updated data
-                    self.load_task_details()
-                    self.app.notify(f"Task {self.task_id} updated", severity="success")
+
+                    # Store the callback for after resume
+                    self._after_resume_callback = after_nvim
+
+                    # Exit TUI, run nvim, then re-enter
+                    with self.app.suspend():
+                        subprocess.run(['nvim', str(task_file)])
+
+                    # Execute callback
+                    if hasattr(self, '_after_resume_callback'):
+                        self._after_resume_callback()
+                        delattr(self, '_after_resume_callback')
                 else:
                     self.app.notify(f"Task file not found: {task_file}", severity="error")
             else:
