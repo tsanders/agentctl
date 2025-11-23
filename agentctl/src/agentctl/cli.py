@@ -218,6 +218,80 @@ def task_create(
     console.print(f"  Priority: [{priority.value}]{priority.value.upper()}[/{priority.value}]")
 
 
+@task_app.command("validate")
+def task_validate(
+    project_id: Optional[str] = typer.Argument(None, help="Project ID (optional, validates all if not specified)"),
+):
+    """Validate markdown task files"""
+    from agentctl.core import task_sync
+
+    if project_id:
+        # Validate specific project
+        result = task_sync.sync_project_tasks(project_id)
+
+        console.print(f"\n📋 [bold]Validation Results for {project_id}[/bold]")
+        console.print(f"  ✓ Valid tasks: [green]{result.synced_count}[/green]")
+        console.print(f"  ✗ Invalid tasks: [red]{result.error_count}[/red]")
+
+        if result.errors:
+            console.print("\n[red]Errors:[/red]")
+            for error in result.errors:
+                console.print(f"  • {error}")
+
+        raise typer.Exit(0 if result.error_count == 0 else 1)
+    else:
+        # Validate all projects
+        results = task_sync.sync_all_tasks()
+
+        total_valid = sum(r.synced_count for r in results.values())
+        total_invalid = sum(r.error_count for r in results.values())
+
+        console.print(f"\n📋 [bold]Validation Results (All Projects)[/bold]")
+        console.print(f"  Projects scanned: {len(results)}")
+        console.print(f"  ✓ Valid tasks: [green]{total_valid}[/green]")
+        console.print(f"  ✗ Invalid tasks: [red]{total_invalid}[/red]")
+
+        for project_id, result in results.items():
+            if result.error_count > 0:
+                console.print(f"\n[yellow]{project_id}:[/yellow]")
+                for error in result.errors[:3]:  # Show first 3 errors per project
+                    console.print(f"  • {error}")
+                if len(result.errors) > 3:
+                    console.print(f"  ... and {len(result.errors) - 3} more errors")
+
+        raise typer.Exit(0 if total_invalid == 0 else 1)
+
+
+@task_app.command("sync")
+def task_sync_cmd(
+    project_id: Optional[str] = typer.Argument(None, help="Project ID (optional, syncs all if not specified)"),
+):
+    """Manually sync markdown task files to database"""
+    from agentctl.core import task_sync
+
+    if project_id:
+        # Sync specific project
+        with console.status(f"[bold green]Syncing tasks for {project_id}..."):
+            result = task_sync.sync_project_tasks(project_id)
+
+        console.print(f"✓ Synced {result.synced_count} tasks for {project_id}")
+        if result.error_count > 0:
+            console.print(f"⚠️  {result.error_count} errors encountered")
+            console.print("Run [cyan]agentctl task validate {project_id}[/cyan] for details")
+    else:
+        # Sync all projects
+        with console.status("[bold green]Syncing all projects..."):
+            results = task_sync.sync_all_tasks()
+
+        total_synced = sum(r.synced_count for r in results.values())
+        total_errors = sum(r.error_count for r in results.values())
+
+        console.print(f"✓ Synced {total_synced} tasks across {len(results)} projects")
+        if total_errors > 0:
+            console.print(f"⚠️  {total_errors} errors encountered")
+            console.print("Run [cyan]agentctl task validate[/cyan] for details")
+
+
 # Agent management commands
 agent_app = typer.Typer(help="Agent management commands")
 app.add_typer(agent_app, name="agent")
@@ -263,18 +337,38 @@ def project_create(
     project_id: str = typer.Argument(..., help="Project ID (e.g., RRA)"),
     name: str = typer.Option(..., help="Project name"),
     description: Optional[str] = typer.Option(None, help="Project description"),
+    tasks_path: Optional[str] = typer.Option(None, help="Path to markdown task files"),
 ):
     """Create a new project"""
+    from pathlib import Path
+
+    # Validate tasks_path if provided
+    if tasks_path:
+        path = Path(tasks_path).expanduser().resolve()
+        if not path.exists():
+            console.print(f"[yellow]Warning:[/yellow] Path does not exist: {path}")
+            create = typer.confirm("Create directory?", default=True)
+            if create:
+                path.mkdir(parents=True, exist_ok=True)
+                console.print(f"✓ Created directory: {path}")
+            else:
+                tasks_path = None
+
+        tasks_path = str(path) if tasks_path else None
+
     database.create_project(
         project_id=project_id,
         name=name,
-        description=description
+        description=description,
+        tasks_path=tasks_path
     )
 
     console.print(f"✓ Project [cyan]{project_id}[/cyan] created")
     console.print(f"  Name: {name}")
     if description:
         console.print(f"  Description: {description}")
+    if tasks_path:
+        console.print(f"  Tasks Path: {tasks_path}")
 
 
 @project_app.command("list")

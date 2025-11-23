@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Optional, Dict
 from datetime import datetime
 
-from agentctl.core import database
+from agentctl.core import database, task_md, task_sync
 from agentctl.core.tmux import create_session, session_exists
 from agentctl.core.git import create_branch, get_current_branch
 
@@ -147,3 +147,134 @@ def get_next_review() -> Optional[Dict]:
         return None
 
     return tasks[0]
+
+
+# Markdown task operations
+
+def create_markdown_task(
+    project_id: str,
+    category: str,
+    title: str,
+    description: Optional[str] = None,
+    repository_id: Optional[str] = None,
+    task_type: str = "feature",
+    priority: str = "medium"
+) -> Optional[str]:
+    """
+    Create a new markdown task file
+
+    Args:
+        project_id: Project ID
+        category: Task category (FEATURE, BUG, etc.)
+        title: Task title
+        description: Optional description
+        repository_id: Optional repository ID
+        task_type: Task type
+        priority: Task priority
+
+    Returns:
+        Task ID if successful, None otherwise
+    """
+    # Get project
+    project = database.get_project(project_id)
+    if not project or not project.get('tasks_path'):
+        return None
+
+    tasks_path = Path(project['tasks_path'])
+
+    # Generate next task ID
+    task_id = task_md.get_next_task_id(tasks_path, project_id, category)
+
+    # Generate task data
+    task_data = task_md.generate_task_template(
+        task_id=task_id,
+        title=title,
+        project_id=project_id,
+        repository_id=repository_id,
+        category=category,
+        task_type=task_type,
+        priority=priority,
+        description=description or ""
+    )
+
+    # Write markdown file
+    task_file = tasks_path / f"{task_id}.md"
+    body = f"# {title}\n\n{description or ''}"
+    task_md.write_task_file(task_file, task_data, body)
+
+    # Sync to database
+    task_sync.sync_project_tasks(project_id)
+
+    return task_id
+
+
+def update_markdown_task(task_id: str, updates: Dict) -> bool:
+    """
+    Update a markdown task file
+
+    Args:
+        task_id: Task ID
+        updates: Dictionary of fields to update
+
+    Returns:
+        True if successful, False otherwise
+    """
+    # Get task from database to verify it exists and is markdown
+    task = database.get_task(task_id)
+    if not task or task.get('source') != 'markdown':
+        return False
+
+    # Get project to find tasks_path
+    project = database.get_project(task['project_id'])
+    if not project or not project.get('tasks_path'):
+        return False
+
+    tasks_path = Path(project['tasks_path'])
+    task_file = tasks_path / f"{task_id}.md"
+
+    if not task_file.exists():
+        return False
+
+    # Update file
+    success = task_md.update_task_file(task_file, updates)
+
+    if success:
+        # Sync to database
+        task_sync.sync_project_tasks(task['project_id'])
+
+    return success
+
+
+def delete_markdown_task(task_id: str) -> bool:
+    """
+    Delete a markdown task file
+
+    Args:
+        task_id: Task ID
+
+    Returns:
+        True if successful, False otherwise
+    """
+    # Get task from database
+    task = database.get_task(task_id)
+    if not task or task.get('source') != 'markdown':
+        return False
+
+    # Get project to find tasks_path
+    project = database.get_project(task['project_id'])
+    if not project or not project.get('tasks_path'):
+        return False
+
+    tasks_path = Path(project['tasks_path'])
+    task_file = tasks_path / f"{task_id}.md"
+
+    try:
+        if task_file.exists():
+            task_file.unlink()
+
+        # Remove from database
+        database.delete_task(task_id)
+
+        return True
+    except Exception:
+        return False
