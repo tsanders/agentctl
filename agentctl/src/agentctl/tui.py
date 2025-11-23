@@ -1044,12 +1044,15 @@ class TaskManagementScreen(Screen):
                         task_file = Path(project['tasks_path']) / f"{task_id}.md"
 
                         if task_file.exists():
-                            # Exit TUI, open nvim, then reload
-                            self.app.exit()
+                            # Suspend TUI, open nvim, then resume and sync
                             import subprocess
+                            self.app.suspend()
                             subprocess.run(['nvim', str(task_file)])
-                            # Note: We can't reload after nvim because app.exit() ends the program
-                            # User will need to restart the TUI
+                            # Sync the changes after editing
+                            task_sync.sync_project_tasks(task['project_id'])
+                            # Reload the task list to show updated data
+                            self.load_tasks()
+                            self.app.notify(f"Task {task_id} updated", severity="success")
                         else:
                             self.app.notify(f"Task file not found: {task_file}", severity="error")
                     else:
@@ -1208,10 +1211,15 @@ class TaskDetailScreen(Screen):
                 task_file = Path(project['tasks_path']) / f"{self.task_id}.md"
 
                 if task_file.exists():
-                    # Exit TUI, open nvim
-                    self.app.exit()
+                    # Suspend TUI, open nvim, then resume and sync
                     import subprocess
+                    self.app.suspend()
                     subprocess.run(['nvim', str(task_file)])
+                    # Sync the changes after editing
+                    task_sync.sync_project_tasks(self.task_data['project_id'])
+                    # Reload the task details to show updated data
+                    self.load_task_details()
+                    self.app.notify(f"Task {self.task_id} updated", severity="success")
                 else:
                     self.app.notify(f"Task file not found: {task_file}", severity="error")
             else:
