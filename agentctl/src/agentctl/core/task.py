@@ -100,16 +100,30 @@ def start_task(task_id: str, agent_type: Optional[str] = None, working_dir: Opti
     except Exception as e:
         raise RuntimeError(f"Failed to create tmux session: {e}")
 
-    # Update database
-    database.update_task_status(
-        task_id=task_id,
-        status='running',
-        phase='planning',
-        started_at=int(datetime.now().timestamp()),
-        git_branch=branch,
-        tmux_session=session,
-        agent_type=agent_type or 'claude-code'
-    )
+    # Update task status (check if markdown or database)
+    task_data = database.get_task(task_id)
+    if task_data and task_data.get('source') == 'markdown':
+        # Update markdown task
+        updates = {
+            'status': 'running',
+            'phase': 'planning',
+            'started_at': datetime.now().isoformat(),
+            'git_branch': branch,
+            'tmux_session': session,
+            'agent_type': agent_type or 'claude-code'
+        }
+        update_markdown_task(task_id, updates)
+    else:
+        # Update database task
+        database.update_task_status(
+            task_id=task_id,
+            status='running',
+            phase='planning',
+            started_at=int(datetime.now().timestamp()),
+            git_branch=branch,
+            tmux_session=session,
+            agent_type=agent_type or 'claude-code'
+        )
 
     # Log event
     database.add_event(task_id, 'task_started', {'branch': branch, 'session': session})
@@ -119,23 +133,39 @@ def start_task(task_id: str, agent_type: Optional[str] = None, working_dir: Opti
 
 def pause_task(task_id: str):
     """Pause a running task"""
-    database.update_task_status(task_id, 'paused')
+    task_data = database.get_task(task_id)
+    if task_data and task_data.get('source') == 'markdown':
+        update_markdown_task(task_id, {'status': 'paused'})
+    else:
+        database.update_task_status(task_id, 'paused')
     database.add_event(task_id, 'task_paused')
 
 
 def resume_task(task_id: str):
     """Resume a paused task"""
-    database.update_task_status(task_id, 'running')
+    task_data = database.get_task(task_id)
+    if task_data and task_data.get('source') == 'markdown':
+        update_markdown_task(task_id, {'status': 'running'})
+    else:
+        database.update_task_status(task_id, 'running')
     database.add_event(task_id, 'task_resumed')
 
 
 def complete_task(task_id: str):
     """Mark a task as complete"""
-    database.update_task_status(
-        task_id,
-        'complete',
-        completed_at=int(datetime.now().timestamp())
-    )
+    task_data = database.get_task(task_id)
+    if task_data and task_data.get('source') == 'markdown':
+        updates = {
+            'status': 'completed',
+            'completed_at': datetime.now().isoformat()
+        }
+        update_markdown_task(task_id, updates)
+    else:
+        database.update_task_status(
+            task_id,
+            'completed',
+            completed_at=int(datetime.now().timestamp())
+        )
     database.add_event(task_id, 'task_completed')
 
 

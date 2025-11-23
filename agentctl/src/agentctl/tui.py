@@ -1197,19 +1197,45 @@ class TaskDetailScreen(Screen):
             return
 
         from datetime import datetime
-        database.update_task_status(
-            self.task_id,
-            "completed",
-            completed_at=int(datetime.now().timestamp())
-        )
+
+        # Check if this is a markdown task
+        task_source = self.task_data.get('source', 'database')
+        if task_source == 'markdown':
+            # Update markdown task
+            updates = {
+                'status': 'completed',
+                'completed_at': datetime.now().isoformat()
+            }
+            success = update_markdown_task(self.task_id, updates)
+            if not success:
+                self.app.notify("Failed to update markdown task", severity="error")
+                return
+        else:
+            # Update database task
+            database.update_task_status(
+                self.task_id,
+                "completed",
+                completed_at=int(datetime.now().timestamp())
+            )
+
         database.add_event(self.task_id, "completed")
         self.app.notify(f"Task {self.task_id} marked as completed", severity="success")
         self.load_task_details()
 
     def action_delete_task(self) -> None:
         """Delete this task with confirmation"""
-        # TODO: Add confirmation modal
-        database.delete_task(self.task_id)
+        # Check if this is a markdown task
+        task_source = self.task_data.get('source', 'database')
+        if task_source == 'markdown':
+            # Delete markdown task
+            success = delete_markdown_task(self.task_id)
+            if not success:
+                self.app.notify("Failed to delete markdown task", severity="error")
+                return
+        else:
+            # Delete database task
+            database.delete_task(self.task_id)
+
         database.add_event(self.task_id, "deleted")
         self.app.notify(f"Task {self.task_id} deleted", severity="warning")
         self.app.pop_screen()
