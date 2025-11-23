@@ -23,6 +23,7 @@ def init_db():
             name TEXT NOT NULL,
             description TEXT,
             default_repository_id TEXT,
+            tasks_path TEXT,
             created_at INTEGER NOT NULL,
             metadata TEXT
         );
@@ -56,9 +57,19 @@ def init_db():
             worktree_path TEXT,
             agent_type TEXT,
             commits INTEGER DEFAULT 0,
+            source TEXT DEFAULT 'database',
             metadata TEXT,
             FOREIGN KEY (project_id) REFERENCES projects(id),
             FOREIGN KEY (repository_id) REFERENCES repositories(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS task_sync_errors (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id TEXT NOT NULL,
+            file_path TEXT NOT NULL,
+            error_message TEXT NOT NULL,
+            timestamp INTEGER NOT NULL,
+            FOREIGN KEY (project_id) REFERENCES projects(id)
         );
 
         CREATE TABLE IF NOT EXISTS events (
@@ -82,9 +93,11 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
         CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority);
         CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
+        CREATE INDEX IF NOT EXISTS idx_tasks_source ON tasks(source);
         CREATE INDEX IF NOT EXISTS idx_events_task ON events(task_id);
         CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);
         CREATE INDEX IF NOT EXISTS idx_repositories_project ON repositories(project_id);
+        CREATE INDEX IF NOT EXISTS idx_sync_errors_project ON task_sync_errors(project_id);
     """)
 
     conn.commit()
@@ -428,16 +441,17 @@ def get_task_with_details(task_id: str) -> Optional[Dict]:
 def create_project(
     project_id: str,
     name: str,
-    description: Optional[str] = None
+    description: Optional[str] = None,
+    tasks_path: Optional[str] = None
 ) -> None:
     """Create a new project"""
     conn = get_connection()
     cursor = conn.cursor()
 
     cursor.execute("""
-        INSERT INTO projects (id, name, description, created_at)
-        VALUES (?, ?, ?, ?)
-    """, (project_id, name, description, int(datetime.now().timestamp())))
+        INSERT INTO projects (id, name, description, tasks_path, created_at)
+        VALUES (?, ?, ?, ?, ?)
+    """, (project_id, name, description, tasks_path, int(datetime.now().timestamp())))
 
     conn.commit()
     conn.close()
@@ -471,7 +485,8 @@ def update_project(
     project_id: str,
     name: Optional[str] = None,
     description: Optional[str] = None,
-    default_repository_id: Optional[str] = None
+    default_repository_id: Optional[str] = None,
+    tasks_path: Optional[str] = None
 ) -> None:
     """Update project fields (only provided fields are updated)"""
     conn = get_connection()
@@ -489,6 +504,9 @@ def update_project(
     if default_repository_id is not None:
         updates.append("default_repository_id = ?")
         params.append(default_repository_id)
+    if tasks_path is not None:
+        updates.append("tasks_path = ?")
+        params.append(tasks_path)
 
     if not updates:
         conn.close()
@@ -586,6 +604,56 @@ def update_repository(
     params.append(repository_id)
     query = f"UPDATE repositories SET {', '.join(updates)} WHERE id = ?"
     cursor.execute(query, params)
+
+    conn.commit()
+    conn.close()
+
+
+# Task sync error management functions
+
+def add_sync_error(project_id: str, file_path: str, error_message: str) -> None:
+    """Add a task sync error"""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        INSERT INTO task_sync_errors (project_id, file_path, error_message, timestamp)
+        VALUES (?, ?, ?, ?)
+    """, (project_id, file_path, error_message, int(datetime.now().timestamp())))
+
+    conn.commit()
+    conn.close()
+
+
+def get_sync_errors(project_id: Optional[str] = None) -> List[Dict]:
+    """Get sync errors, optionally filtered by project"""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    if project_id:
+        cursor.execute("""
+            SELECT * FROM task_sync_errors
+            WHERE project_id = ?
+            ORDER BY timestamp DESC
+        """, (project_id,))
+    else:
+        cursor.execute("SELECT * FROM task_sync_errors ORDER BY timestamp DESC")
+
+    errors = [dict(row) for row in cursor.fetchall()]
+    conn.close()
+
+    return errors
+
+
+def clear_sync_errors(project_id: Optional[str] = None) -> None:
+    """Clear sync errors, optionally for a specific project"""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    if project_id:
+        cursor.execute("DELETE FROM task_sync_errors WHERE project_id = ?", (project_id,))
+    else:
+        cursor.execute("DELETE FROM task_sync_errors")
 
     conn.commit()
     conn.close()
