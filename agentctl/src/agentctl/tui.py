@@ -1010,7 +1010,7 @@ class TaskManagementScreen(Screen):
         """Handle row selection - open task detail view"""
         if event.data_table.id == "tasks-table":
             row = event.data_table.get_row_at(event.cursor_row)
-            task_id = str(row[0])
+            task_id = str(row[1])  # Task ID is second column (after Source)
             self.app.push_screen(TaskDetailScreen(task_id))
 
     def action_go_back(self) -> None:
