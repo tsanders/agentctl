@@ -1201,6 +1201,8 @@ class TaskDetailScreen(Screen):
             return
 
         container = self.query_one("#task-detail-content", Container)
+        # Remove all existing children before adding new ones
+        container.remove_children()
         container.mount(
             Static(f"📋 {self.task_id}: {self.task_data['title']}", classes="screen-title"),
 
