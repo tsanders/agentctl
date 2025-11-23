@@ -1018,12 +1018,78 @@ class TaskManagementScreen(Screen):
         self.app.pop_screen()
 
     def action_create_task(self) -> None:
-        """Show modal to create a new task"""
-        def check_result(result):
-            if result:
-                self.load_tasks()
+        """Create a new task by opening template in nvim"""
+        # Get list of projects
+        projects = database.list_projects()
 
-        self.app.push_screen(CreateTaskModal(), check_result)
+        if not projects:
+            self.app.notify("No projects found. Create a project first.", severity="error")
+            return
+
+        # Find first project with tasks_path (prefer markdown)
+        markdown_project = None
+        for project in projects:
+            if project.get('tasks_path'):
+                markdown_project = project
+                break
+
+        if not markdown_project:
+            # Fall back to modal for database tasks
+            def check_result(result):
+                if result:
+                    self.load_tasks()
+            self.app.push_screen(CreateTaskModal(), check_result)
+            return
+
+        # Create template for markdown task
+        from pathlib import Path
+        import tempfile
+
+        project_id = markdown_project['id']
+        tasks_path = Path(markdown_project['tasks_path'])
+
+        # Generate next task ID for FEATURE category (most common)
+        next_id = task_md.get_next_task_id(tasks_path, project_id, 'FEATURE')
+
+        # Generate template
+        template_data = task_md.generate_task_template(
+            task_id=next_id,
+            title="New task - edit this title",
+            project_id=project_id,
+            category='FEATURE',
+            priority='medium'
+        )
+
+        # Create temporary file with template
+        temp_file = tasks_path / f".{next_id}.md.tmp"
+        task_md.write_task_file(temp_file, template_data, "# New Task\n\nEdit this description...")
+
+        # Open in nvim
+        import subprocess
+
+        with self.app.suspend():
+            result = subprocess.run(['nvim', str(temp_file)])
+
+        # After nvim closes, validate and move to permanent location
+        if temp_file.exists():
+            task_data, body, errors = task_md.parse_task_file(temp_file)
+
+            if errors:
+                self.app.notify(f"Task validation failed: {'; '.join(errors)}", severity="error")
+                temp_file.unlink()
+            elif task_data and task_data.get('title') != "New task - edit this title":
+                # Valid task that was edited - move to permanent location
+                final_file = tasks_path / f"{next_id}.md"
+                temp_file.rename(final_file)
+
+                # Sync to database
+                task_sync.sync_project_tasks(project_id)
+                self.load_tasks()
+                self.app.notify(f"Task {next_id} created!", severity="success")
+            else:
+                # User didn't edit or left default title - discard
+                temp_file.unlink()
+                self.app.notify("Task creation cancelled", severity="information")
 
     def action_edit_task(self) -> None:
         """Edit selected task - open nvim for markdown, modal for database"""
