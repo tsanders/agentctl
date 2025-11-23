@@ -1167,9 +1167,10 @@ class TaskDetailScreen(Screen):
 
     BINDINGS = [
         ("escape", "go_back", "Back"),
-        ("e", "edit_task", "Edit"),
-        ("s", "start_task", "Start"),
-        ("c", "complete_task", "Complete"),
+        ("e", "edit_in_nvim", "Edit in nvim"),
+        ("1", "cycle_status", "Cycle Status"),
+        ("2", "cycle_priority", "Cycle Priority"),
+        ("3", "cycle_category", "Cycle Category"),
         ("d", "delete_task", "Delete"),
         ("q", "quit", "Quit"),
     ]
@@ -1223,10 +1224,12 @@ class TaskDetailScreen(Screen):
                 id="project-section"
             ),
 
-            # Status & Progress Section
+            # Status & Progress Section (with quick edit hints)
             Container(
                 Static("📊 STATUS & PROGRESS", classes="widget-title"),
-                Static(f"Status: {self._format_status(self.task_data['status'])}", classes="detail-row"),
+                Static(f"[1] Status: {self._format_status(self.task_data['status'])} (press 1 to cycle)", classes="detail-row"),
+                Static(f"[2] Priority: {self.task_data['priority'].upper()} (press 2 to cycle)", classes="detail-row"),
+                Static(f"[3] Category: {self.task_data['category']} (press 3 to cycle)", classes="detail-row"),
                 Static(f"Phase: {self.task_data.get('phase') or 'Not started'}", classes="detail-row"),
                 Static(f"Agent Type: {self.task_data.get('agent_type') or 'Not assigned'}", classes="detail-row"),
                 Static(f"Commits: {self.task_data.get('commits', 0)}", classes="detail-row"),
@@ -1279,7 +1282,7 @@ class TaskDetailScreen(Screen):
         """Go back to previous screen"""
         self.app.pop_screen()
 
-    def action_edit_task(self) -> None:
+    def action_edit_in_nvim(self) -> None:
         """Open nvim for markdown tasks, modal for database tasks"""
         # Check if this is a markdown task
         task_source = self.task_data.get('source', 'database')
@@ -1386,6 +1389,52 @@ class TaskDetailScreen(Screen):
         database.add_event(self.task_id, "deleted")
         self.app.notify(f"Task {self.task_id} deleted", severity="warning")
         self.app.pop_screen()
+
+    def action_cycle_status(self) -> None:
+        """Cycle through status options"""
+        statuses = ['queued', 'running', 'blocked', 'completed', 'failed']
+        current = self.task_data['status']
+        current_idx = statuses.index(current) if current in statuses else 0
+        next_status = statuses[(current_idx + 1) % len(statuses)]
+
+        self._update_field('status', next_status)
+
+    def action_cycle_priority(self) -> None:
+        """Cycle through priority options"""
+        priorities = ['low', 'medium', 'high']
+        current = self.task_data['priority']
+        current_idx = priorities.index(current) if current in priorities else 1
+        next_priority = priorities[(current_idx + 1) % len(priorities)]
+
+        self._update_field('priority', next_priority)
+
+    def action_cycle_category(self) -> None:
+        """Cycle through category options"""
+        categories = ['FEATURE', 'BUG', 'REFACTOR', 'DOCS', 'TEST', 'CHORE']
+        current = self.task_data['category']
+        current_idx = categories.index(current) if current in categories else 0
+        next_category = categories[(current_idx + 1) % len(categories)]
+
+        self._update_field('category', next_category)
+
+    def _update_field(self, field: str, value: str) -> None:
+        """Update a single field in the task"""
+        task_source = self.task_data.get('source', 'database')
+
+        if task_source == 'markdown':
+            # Update markdown task
+            success = update_markdown_task(self.task_id, {field: value})
+            if not success:
+                self.app.notify(f"Failed to update {field}", severity="error")
+                return
+            # Sync changes
+            task_sync.sync_project_tasks(self.task_data['project_id'])
+        else:
+            # Update database task
+            database.update_task(self.task_id, **{field: value})
+
+        self.app.notify(f"{field.capitalize()} changed to: {value}", severity="success")
+        self.load_task_details()
 
 
 class ProjectListScreen(Screen):
