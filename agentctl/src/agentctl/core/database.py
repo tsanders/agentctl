@@ -394,6 +394,7 @@ def list_all_tasks(status: Optional[str] = None, priority: Optional[str] = None)
             t.worktree_path,
             t.agent_type,
             t.commits,
+            t.source,
             p.id as project_id,
             p.name as project_name,
             r.id as repository_id,
