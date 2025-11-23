@@ -1026,24 +1026,50 @@ class TaskManagementScreen(Screen):
         self.app.push_screen(CreateTaskModal(), check_result)
 
     def action_edit_task(self) -> None:
-        """Show modal to edit selected task"""
+        """Edit selected task - open nvim for markdown, modal for database"""
         table = self.query_one("#tasks-table", DataTable)
         if table.row_count > 0 and table.cursor_row is not None:
             row = table.get_row_at(table.cursor_row)
-            task_id = str(row[0])
+            source = str(row[0])  # "[MD]" or "[DB]"
+            task_id = str(row[1])  # Task ID is second column now
 
-            def check_result(result):
-                if result:
-                    self.load_tasks()
+            # Check if this is a markdown task
+            if source == "[MD]":
+                # Get task to find the markdown file path
+                task = database.get_task(task_id)
+                if task:
+                    project = database.get_project(task['project_id'])
+                    if project and project.get('tasks_path'):
+                        from pathlib import Path
+                        task_file = Path(project['tasks_path']) / f"{task_id}.md"
 
-            self.app.push_screen(EditTaskModal(task_id), check_result)
+                        if task_file.exists():
+                            # Exit TUI, open nvim, then reload
+                            self.app.exit()
+                            import subprocess
+                            subprocess.run(['nvim', str(task_file)])
+                            # Note: We can't reload after nvim because app.exit() ends the program
+                            # User will need to restart the TUI
+                        else:
+                            self.app.notify(f"Task file not found: {task_file}", severity="error")
+                    else:
+                        self.app.notify("Task has no tasks_path configured", severity="error")
+                else:
+                    self.app.notify(f"Task {task_id} not found", severity="error")
+            else:
+                # Database task - use modal
+                def check_result(result):
+                    if result:
+                        self.load_tasks()
+
+                self.app.push_screen(EditTaskModal(task_id), check_result)
 
     def action_delete_task(self) -> None:
         """Delete selected task with confirmation"""
         table = self.query_one("#tasks-table", DataTable)
         if table.row_count > 0 and table.cursor_row is not None:
             row = table.get_row_at(table.cursor_row)
-            task_id = str(row[0])
+            task_id = str(row[1])  # Task ID is second column now
             # TODO: Add confirmation modal
             try:
                 database.delete_task(task_id)
@@ -1171,12 +1197,32 @@ class TaskDetailScreen(Screen):
         self.app.pop_screen()
 
     def action_edit_task(self) -> None:
-        """Open edit modal for this task"""
-        def check_result(result):
-            if result:
-                self.load_task_details()
+        """Open nvim for markdown tasks, modal for database tasks"""
+        # Check if this is a markdown task
+        task_source = self.task_data.get('source', 'database')
+        if task_source == 'markdown':
+            # Get task file path
+            project = database.get_project(self.task_data['project_id'])
+            if project and project.get('tasks_path'):
+                from pathlib import Path
+                task_file = Path(project['tasks_path']) / f"{self.task_id}.md"
 
-        self.app.push_screen(EditTaskModal(self.task_id), check_result)
+                if task_file.exists():
+                    # Exit TUI, open nvim
+                    self.app.exit()
+                    import subprocess
+                    subprocess.run(['nvim', str(task_file)])
+                else:
+                    self.app.notify(f"Task file not found: {task_file}", severity="error")
+            else:
+                self.app.notify("Task has no tasks_path configured", severity="error")
+        else:
+            # Database task - use modal
+            def check_result(result):
+                if result:
+                    self.load_task_details()
+
+            self.app.push_screen(EditTaskModal(self.task_id), check_result)
 
     def action_start_task(self) -> None:
         """Open start modal to begin work on task"""
