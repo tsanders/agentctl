@@ -1295,17 +1295,26 @@ Press ESC to go back""")
                 if errors:
                     self.app.notify(f"Task validation failed: {'; '.join(errors)}", severity="error")
                     temp_file.unlink()
-                elif task_data and task_data.get('title') != "New task - edit this title":
-                    # Valid task that was edited - move to permanent location
-                    final_file = tasks_path / f"{next_id}.md"
-                    temp_file.rename(final_file)
+                elif task_data:
+                    # Check if user made any meaningful edits (title or body changed)
+                    title_changed = task_data.get('title') != "New task - edit this title"
+                    body_unchanged = body.strip() == "# New Task\n\nEdit the title above and add description here..."
 
-                    # Sync to database
-                    task_sync.sync_project_tasks(self.project_id)
-                    self.app.notify(f"Task {next_id} created!", severity="success")
-                    task_created = True
+                    if title_changed or not body_unchanged:
+                        # Valid task that was edited - move to permanent location
+                        final_file = tasks_path / f"{next_id}.md"
+                        temp_file.rename(final_file)
+
+                        # Sync to database
+                        task_sync.sync_project_tasks(self.project_id)
+                        self.app.notify(f"Task {next_id} created!", severity="success")
+                        task_created = True
+                    else:
+                        # User didn't edit - discard
+                        temp_file.unlink()
+                        self.app.notify("Task creation cancelled - no changes made", severity="information")
                 else:
-                    # User didn't edit - discard
+                    # No task data parsed
                     temp_file.unlink()
                     self.app.notify("Task creation cancelled", severity="information")
 
