@@ -1017,6 +1017,25 @@ class TaskManagementScreen(Screen):
         """Go back to main dashboard"""
         self.app.pop_screen()
 
+    def _build_repository_comment(self, project_id: str) -> str:
+        """Build a helpful comment showing available repositories"""
+        repositories = database.list_repositories()
+
+        # Filter to repositories for this project (if any association exists)
+        # For now, show all repositories
+        if not repositories:
+            return "<!-- No repositories configured -->"
+
+        lines = ["<!-- Available Repositories:"]
+        for repo in repositories:
+            repo_path = repo.get('path', 'N/A')
+            lines.append(f"  {repo['id']}: {repo_path}")
+        lines.append("-->")
+        lines.append("")
+        lines.append("<!-- To use a repository, set repository_id in frontmatter above -->")
+
+        return "\n".join(lines)
+
     def action_create_task(self) -> None:
         """Create a new task by opening template in nvim"""
         # Get list of projects
@@ -1051,18 +1070,25 @@ class TaskManagementScreen(Screen):
         # Generate next task ID for FEATURE category (most common)
         next_id = task_md.get_next_task_id(tasks_path, project_id, 'FEATURE')
 
+        # Get default repository from project
+        default_repo_id = markdown_project.get('default_repository_id')
+
         # Generate template
         template_data = task_md.generate_task_template(
             task_id=next_id,
             title="New task - edit this title",
             project_id=project_id,
+            repository_id=default_repo_id,
             category='FEATURE',
             priority='medium'
         )
 
+        # Build helpful repository comment for template
+        repo_comment = self._build_repository_comment(project_id)
+
         # Create temporary file with template
         temp_file = tasks_path / f".{next_id}.md.tmp"
-        task_md.write_task_file(temp_file, template_data, "# New Task\n\nEdit this description...")
+        task_md.write_task_file(temp_file, template_data, f"# New Task\n\nEdit this description...\n\n{repo_comment}")
 
         # Open in nvim
         import subprocess
