@@ -8,7 +8,9 @@
       "Bash(python -m agentctl.cli:*)",
       "Bash(tmux ls:*)",
       "Bash(/usr/local/bin/tmux ls:*)",
-      "Bash(python -c:*)"
+      "Bash(python -c:*)",
+      "Bash(python -m py_compile:*)",
+      "Bash(python3 -m py_compile:*)"
     ],
     "deny": [],
     "ask": []

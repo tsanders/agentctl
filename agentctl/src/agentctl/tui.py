@@ -1037,85 +1037,12 @@ class TaskManagementScreen(Screen):
         return "\n".join(lines)
 
     def action_create_task(self) -> None:
-        """Create a new task by opening template in nvim"""
-        # Get list of projects
-        projects = database.list_projects()
-
-        if not projects:
-            self.app.notify("No projects found. Create a project first.", severity="error")
-            return
-
-        # Find first project with tasks_path (prefer markdown)
-        markdown_project = None
-        for project in projects:
-            if project.get('tasks_path'):
-                markdown_project = project
-                break
-
-        if not markdown_project:
-            # Fall back to modal for database tasks
-            def check_result(result):
-                if result:
-                    self.load_tasks()
-            self.app.push_screen(CreateTaskModal(), check_result)
-            return
-
-        # Create template for markdown task
-        from pathlib import Path
-        import tempfile
-
-        project_id = markdown_project['id']
-        tasks_path = Path(markdown_project['tasks_path'])
-
-        # Generate next task ID for FEATURE category (most common)
-        next_id = task_md.get_next_task_id(tasks_path, project_id, 'FEATURE')
-
-        # Get default repository from project
-        default_repo_id = markdown_project.get('default_repository_id')
-
-        # Generate template
-        template_data = task_md.generate_task_template(
-            task_id=next_id,
-            title="New task - edit this title",
-            project_id=project_id,
-            repository_id=default_repo_id,
-            category='FEATURE',
-            priority='medium'
-        )
-
-        # Build helpful repository comment for template
-        repo_comment = self._build_repository_comment(project_id)
-
-        # Create temporary file with template
-        temp_file = tasks_path / f".{next_id}.md.tmp"
-        task_md.write_task_file(temp_file, template_data, f"# New Task\n\nEdit this description...\n\n{repo_comment}")
-
-        # Open in nvim
-        import subprocess
-
-        with self.app.suspend():
-            result = subprocess.run(['nvim', str(temp_file)])
-
-        # After nvim closes, validate and move to permanent location
-        if temp_file.exists():
-            task_data, body, errors = task_md.parse_task_file(temp_file)
-
-            if errors:
-                self.app.notify(f"Task validation failed: {'; '.join(errors)}", severity="error")
-                temp_file.unlink()
-            elif task_data and task_data.get('title') != "New task - edit this title":
-                # Valid task that was edited - move to permanent location
-                final_file = tasks_path / f"{next_id}.md"
-                temp_file.rename(final_file)
-
-                # Sync to database
-                task_sync.sync_project_tasks(project_id)
+        """Create a new task using step-by-step prompts"""
+        def check_result(result):
+            if result:
                 self.load_tasks()
-                self.app.notify(f"Task {next_id} created!", severity="success")
-            else:
-                # User didn't edit or left default title - discard
-                temp_file.unlink()
-                self.app.notify("Task creation cancelled", severity="information")
+
+        self.app.push_screen(CreateTaskPromptScreen(), check_result)
 
     def action_edit_task(self) -> None:
         """Edit selected task - open nvim for markdown, modal for database"""
@@ -1186,6 +1113,207 @@ class TaskManagementScreen(Screen):
                 self.app.notify(f"Task {task_id} deleted", severity="success")
             except Exception as e:
                 self.app.notify(f"Error deleting task: {e}", severity="error")
+
+
+class CreateTaskPromptScreen(Screen):
+    """Screen for collecting task metadata via simple prompts"""
+
+    def __init__(self):
+        super().__init__()
+        self.step = 0
+        self.project_id = None
+        self.repository_id = None
+        self.category = 'FEATURE'
+        self.priority = 'medium'
+        self.projects = []
+        self.repositories = []
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Container(
+            Static("", id="prompt-text"),
+            Static("", id="options-text"),
+            id="prompt-container"
+        )
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.projects = database.list_projects()
+        self.repositories = database.list_repositories()
+        self.show_next_prompt()
+
+    def show_next_prompt(self) -> None:
+        prompt_text = self.query_one("#prompt-text", Static)
+        options_text = self.query_one("#options-text", Static)
+
+        if self.step == 0:
+            # Select project
+            prompt_text.update("📦 SELECT PROJECT (press number):")
+            if not self.projects:
+                options_text.update("\nNo projects found. Press ESC to go back.")
+            else:
+                options = "\n".join([f"  [{i+1}] {p['name']} ({p['id']})"
+                                    for i, p in enumerate(self.projects)])
+                options_text.update(f"\n{options}\n\nPress ESC to cancel")
+
+        elif self.step == 1:
+            # Select repository
+            prompt_text.update(f"📂 SELECT REPOSITORY for {self.project_id} (press number or 'n' for none):")
+            if not self.repositories:
+                options_text.update("\nNo repositories found. Press 'n' for none or ESC to go back.")
+            else:
+                options = "\n".join([f"  [{i+1}] {r['name']} ({r['id']})"
+                                    for i, r in enumerate(self.repositories)])
+                options_text.update(f"\n{options}\n  [n] None\n\nPress ESC to go back")
+
+        elif self.step == 2:
+            # Select category
+            prompt_text.update("📋 SELECT CATEGORY (press number):")
+            options_text.update("""
+  [1] FEATURE
+  [2] BUG
+  [3] REFACTOR
+  [4] DOCS
+  [5] TEST
+  [6] CHORE
+
+Press ESC to go back""")
+
+        elif self.step == 3:
+            # Select priority
+            prompt_text.update("⚡ SELECT PRIORITY (press number):")
+            options_text.update("""
+  [1] Low
+  [2] Medium
+  [3] High
+
+Press ESC to go back""")
+
+    def on_key(self, event) -> None:
+        if event.key == "escape":
+            if self.step == 0:
+                # Cancel and go back
+                self.dismiss(False)
+            else:
+                # Go back one step
+                self.step -= 1
+                self.show_next_prompt()
+            return
+
+        if self.step == 0:
+            # Project selection
+            try:
+                choice = int(event.key) - 1
+                if 0 <= choice < len(self.projects):
+                    self.project_id = self.projects[choice]['id']
+                    self.step += 1
+                    self.show_next_prompt()
+            except (ValueError, IndexError):
+                pass
+
+        elif self.step == 1:
+            # Repository selection
+            if event.key == 'n':
+                self.repository_id = None
+                self.step += 1
+                self.show_next_prompt()
+            else:
+                try:
+                    choice = int(event.key) - 1
+                    if 0 <= choice < len(self.repositories):
+                        self.repository_id = self.repositories[choice]['id']
+                        self.step += 1
+                        self.show_next_prompt()
+                except (ValueError, IndexError):
+                    pass
+
+        elif self.step == 2:
+            # Category selection
+            categories = ['FEATURE', 'BUG', 'REFACTOR', 'DOCS', 'TEST', 'CHORE']
+            try:
+                choice = int(event.key) - 1
+                if 0 <= choice < len(categories):
+                    self.category = categories[choice]
+                    self.step += 1
+                    self.show_next_prompt()
+            except (ValueError, IndexError):
+                pass
+
+        elif self.step == 3:
+            # Priority selection
+            priorities = ['low', 'medium', 'high']
+            try:
+                choice = int(event.key) - 1
+                if 0 <= choice < len(priorities):
+                    self.priority = priorities[choice]
+                    # Done with prompts, open nvim
+                    self.open_nvim_template()
+            except (ValueError, IndexError):
+                pass
+
+    def open_nvim_template(self) -> None:
+        """Open nvim with pre-filled template"""
+        from pathlib import Path
+        import subprocess
+
+        try:
+            # Get project
+            project = database.get_project(self.project_id)
+            if not project or not project.get('tasks_path'):
+                self.app.notify("Project has no tasks_path configured", severity="error")
+                self.dismiss(False)
+                return
+
+            tasks_path = Path(project['tasks_path'])
+
+            # Generate next task ID based on selected category
+            next_id = task_md.get_next_task_id(tasks_path, self.project_id, self.category)
+
+            # Generate template with collected metadata
+            template_data = task_md.generate_task_template(
+                task_id=next_id,
+                title="New task - edit this title",
+                project_id=self.project_id,
+                repository_id=self.repository_id,
+                category=self.category,
+                priority=self.priority
+            )
+
+            # Create temporary file
+            temp_file = tasks_path / f".{next_id}.md.tmp"
+            task_md.write_task_file(temp_file, template_data, "# New Task\n\nEdit the title above and add description here...")
+
+            # Open in nvim
+            with self.app.suspend():
+                subprocess.run(['nvim', str(temp_file)])
+
+            # After nvim closes, validate and save
+            task_created = False
+            if temp_file.exists():
+                task_data, body, errors = task_md.parse_task_file(temp_file)
+
+                if errors:
+                    self.app.notify(f"Task validation failed: {'; '.join(errors)}", severity="error")
+                    temp_file.unlink()
+                elif task_data and task_data.get('title') != "New task - edit this title":
+                    # Valid task that was edited - move to permanent location
+                    final_file = tasks_path / f"{next_id}.md"
+                    temp_file.rename(final_file)
+
+                    # Sync to database
+                    task_sync.sync_project_tasks(self.project_id)
+                    self.app.notify(f"Task {next_id} created!", severity="success")
+                    task_created = True
+                else:
+                    # User didn't edit - discard
+                    temp_file.unlink()
+                    self.app.notify("Task creation cancelled", severity="information")
+
+            # Go back to task list with result
+            self.dismiss(task_created)
+        except Exception as e:
+            self.app.notify(f"Error creating task: {str(e)}", severity="error")
+            self.dismiss(False)
 
 
 class TaskDetailScreen(Screen):
