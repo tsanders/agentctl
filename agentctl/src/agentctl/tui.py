@@ -1203,11 +1203,7 @@ class TaskDetailScreen(Screen):
         container = self.query_one("#task-detail-content", Container)
 
         # Remove all existing children to avoid duplicate IDs
-        try:
-            for child in list(container.children):
-                child.remove()
-        except Exception:
-            pass
+        container.remove_children()
 
         container.mount(
             Static(f"📋 {self.task_id}: {self.task_data['title']}", classes="screen-title"),
@@ -1220,7 +1216,7 @@ class TaskDetailScreen(Screen):
                 Static(f"Category: {self.task_data['category']}", classes="detail-row"),
                 Static(f"Type: {self.task_data['type']}", classes="detail-row"),
                 Static(f"Priority: {self.task_data['priority'].upper()}", classes="detail-row"),
-                id="info-section"
+                classes="detail-section info-section"
             ),
 
             # Project & Repository Section
@@ -1229,7 +1225,7 @@ class TaskDetailScreen(Screen):
                 Static(f"Project: {self.task_data.get('project_name', 'Unknown')}", classes="detail-row"),
                 Static(f"Repository: {self.task_data.get('repository_name', 'None')}", classes="detail-row"),
                 Static(f"Repository Path: {self.task_data.get('repository_path', 'N/A')}", classes="detail-row"),
-                id="project-section"
+                classes="detail-section project-section"
             ),
 
             # Status & Progress Section (with quick edit hints)
@@ -1241,7 +1237,7 @@ class TaskDetailScreen(Screen):
                 Static(f"Phase: {self.task_data.get('phase') or 'Not started'}", classes="detail-row"),
                 Static(f"Agent Type: {self.task_data.get('agent_type') or 'Not assigned'}", classes="detail-row"),
                 Static(f"Commits: {self.task_data.get('commits', 0)}", classes="detail-row"),
-                id="status-section"
+                classes="detail-section status-section"
             ),
 
             # Timestamps Section
@@ -1250,7 +1246,7 @@ class TaskDetailScreen(Screen):
                 Static(f"Created: {self._format_timestamp(self.task_data.get('created_at'))}", classes="detail-row"),
                 Static(f"Started: {self._format_timestamp(self.task_data.get('started_at'))}", classes="detail-row"),
                 Static(f"Completed: {self._format_timestamp(self.task_data.get('completed_at'))}", classes="detail-row"),
-                id="timestamps-section"
+                classes="detail-section timestamps-section"
             ),
 
             # Git & Session Section
@@ -1259,7 +1255,7 @@ class TaskDetailScreen(Screen):
                 Static(f"Branch: {self.task_data.get('git_branch') or 'Not created'}", classes="detail-row"),
                 Static(f"Worktree: {self.task_data.get('worktree_path') or 'Not created'}", classes="detail-row"),
                 Static(f"tmux Session: {self.task_data.get('tmux_session') or 'Not running'}", classes="detail-row"),
-                id="session-section"
+                classes="detail-section session-section"
             ),
         )
 
@@ -1650,7 +1646,7 @@ class AgentDashboard(App):
         height: auto;
     }
 
-    #info-section, #project-section, #status-section, #timestamps-section, #session-section {
+    .detail-section {
         border: solid $accent;
         margin: 1;
         padding: 1;
