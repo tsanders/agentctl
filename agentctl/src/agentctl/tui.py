@@ -864,12 +864,27 @@ class ProjectDetailScreen(Screen):
         ("r", "add_repo", "Add Repo"),
         ("e", "edit_repo", "Edit Repo"),
         ("t", "create_task", "Create Task"),
+        ("j", "cursor_down", "Down"),
+        ("k", "cursor_up", "Up"),
         ("q", "quit", "Quit"),
     ]
 
     def __init__(self, project_id: str):
         super().__init__()
         self.project_id = project_id
+        self.active_table = "repos"  # Track which table is focused
+
+    def action_cursor_down(self) -> None:
+        """Move cursor down (vim j)"""
+        table_id = "#repos-table" if self.active_table == "repos" else "#tasks-table"
+        table = self.query_one(table_id, DataTable)
+        table.action_cursor_down()
+
+    def action_cursor_up(self) -> None:
+        """Move cursor up (vim k)"""
+        table_id = "#repos-table" if self.active_table == "repos" else "#tasks-table"
+        table = self.query_one(table_id, DataTable)
+        table.action_cursor_up()
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -973,8 +988,20 @@ class TaskManagementScreen(Screen):
         ("n", "create_task", "New Task"),
         ("e", "edit_task", "Edit Task"),
         ("d", "delete_task", "Delete Task"),
+        ("j", "cursor_down", "Down"),
+        ("k", "cursor_up", "Up"),
         ("q", "quit", "Quit"),
     ]
+
+    def action_cursor_down(self) -> None:
+        """Move cursor down (vim j)"""
+        table = self.query_one("#tasks-table", DataTable)
+        table.action_cursor_down()
+
+    def action_cursor_up(self) -> None:
+        """Move cursor up (vim k)"""
+        table = self.query_one("#tasks-table", DataTable)
+        table.action_cursor_up()
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -1367,6 +1394,8 @@ class TaskDetailScreen(Screen):
         ("3", "cycle_category", "Cycle Category"),
         ("c", "complete_task", "Complete"),
         ("d", "delete_task", "Delete"),
+        ("j", "scroll_down", "Down"),
+        ("k", "scroll_up", "Up"),
         ("q", "quit", "Quit"),
     ]
 
@@ -1374,6 +1403,16 @@ class TaskDetailScreen(Screen):
         super().__init__()
         self.task_id = task_id
         self.task_data = None
+
+    def action_scroll_down(self) -> None:
+        """Scroll down (vim j)"""
+        container = self.query_one("#task-detail-container", Container)
+        container.scroll_down()
+
+    def action_scroll_up(self) -> None:
+        """Scroll up (vim k)"""
+        container = self.query_one("#task-detail-container", Container)
+        container.scroll_up()
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -1609,8 +1648,20 @@ class ProjectListScreen(Screen):
         ("escape", "go_back", "Back"),
         ("n", "new_project", "New Project"),
         ("e", "edit_project", "Edit Project"),
+        ("j", "cursor_down", "Down"),
+        ("k", "cursor_up", "Up"),
         ("q", "quit", "Quit"),
     ]
+
+    def action_cursor_down(self) -> None:
+        """Move cursor down (vim j)"""
+        table = self.query_one("#projects-table", DataTable)
+        table.action_cursor_down()
+
+    def action_cursor_up(self) -> None:
+        """Move cursor up (vim k)"""
+        table = self.query_one("#projects-table", DataTable)
+        table.action_cursor_up()
 
     def compose(self) -> ComposeResult:
         yield Header()
