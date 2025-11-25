@@ -1001,19 +1001,16 @@ class TaskManagementScreen(Screen):
             self.app.notify(f"Sync error: {e}", severity="warning")
 
     def load_tasks(self) -> None:
-        """Load and display all tasks"""
+        """Load and display all tasks - compact for mobile"""
         tasks = database.list_all_tasks()
 
         table = self.query_one("#tasks-table", DataTable)
         table.clear()
-        table.add_columns("Source", "Task ID", "Project", "Title", "Status", "Priority", "Tmux")
+        # Compact columns: S=Status, P=Priority, T=Tmux
+        table.add_columns("ID", "Title", "S", "P", "T")
         table.cursor_type = "row"
 
         for task in tasks:
-            # Source indicator
-            source = task.get('source', 'database')
-            source_label = "[MD]" if source == 'markdown' else "[DB]"
-
             status_icon = {
                 "queued": "⚪",
                 "running": "🟢",
@@ -1028,25 +1025,22 @@ class TaskManagementScreen(Screen):
                 "low": "🟢"
             }.get(task.get('priority', 'medium'), "⚪")
 
-            # Tmux session indicator
-            tmux_session = task.get('tmux_session')
-            tmux_label = tmux_session[:20] if tmux_session else "-"
+            # Tmux: ✓ if running, - if not
+            tmux_indicator = "✓" if task.get('tmux_session') else "-"
 
             table.add_row(
-                source_label,
                 task['task_id'],
-                task.get('project_name', '-')[:20],
-                task.get('title', '-')[:30],
-                f"{status_icon} {task['status'].upper()}",
-                f"{priority_icon} {task['priority'].upper()}",
-                tmux_label
+                task.get('title', '-')[:40],
+                status_icon,
+                priority_icon,
+                tmux_indicator
             )
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Handle row selection - open task detail view"""
         if event.data_table.id == "tasks-table":
             row = event.data_table.get_row_at(event.cursor_row)
-            task_id = str(row[1])  # Task ID is second column (after Source)
+            task_id = str(row[0])  # Task ID is first column
             self.app.push_screen(TaskDetailScreen(task_id))
 
     def action_go_back(self) -> None:
