@@ -700,13 +700,8 @@ class StartTaskModal(ModalScreen):
             tmux_session_name = f"agent-{self.task_id}"
             yield Container(
                 Label(f"Start Task: {self.task_id}", id="modal-title"),
-                Static("❌ No repository associated with this task", classes="detail-row"),
-                Static("Cannot create worktree without a repository.", classes="detail-row"),
-                Static("", classes="detail-row"),  # Spacer
-                Static("🖥️  tmux Session", classes="widget-title"),
-                Static(f"Session: {tmux_session_name}", classes="detail-row"),
-                Static(f"Attach: tmux attach -t {tmux_session_name}", classes="detail-row"),
-                Static("A tmux session will be created in the current directory", classes="detail-row"),
+                Static("❌ No repository - cannot create worktree", classes="detail-row"),
+                Static(f"🖥️ tmux: {tmux_session_name}", classes="detail-row"),
                 Container(
                     Button("Start Anyway", id="start-btn", variant="success"),
                     Button("Cancel", id="cancel-btn", variant="error"),
@@ -728,27 +723,20 @@ class StartTaskModal(ModalScreen):
 
         yield Container(
             Label(f"Start Task: {self.task_id}", id="modal-title"),
-            Static(f"Title: {self.task_data['title']}", classes="detail-row"),
-            Static(f"Repository: {self.task_data['repository_name']}", classes="detail-row"),
-            Static("", classes="detail-row"),  # Spacer
-            Static("🌿 Git Worktree Configuration", classes="widget-title"),
+            Static(f"Title: {self.task_data['title'][:40]}", classes="detail-row"),
+            Static(f"Repo: {self.task_data['repository_name']}", classes="detail-row"),
             Static(f"Branch: {branch_name}", classes="detail-row"),
-            Static(f"Worktree Path: {worktree_path}", classes="detail-row"),
-            Static("", classes="detail-row"),  # Spacer
-            Static("🖥️  tmux Session", classes="widget-title"),
-            Static(f"Session: {tmux_session_name}", classes="detail-row"),
-            Static(f"Attach: tmux attach -t {tmux_session_name}", classes="detail-row"),
-            Static("", classes="detail-row"),  # Spacer
+            Static(f"Worktree: {worktree_path}", classes="detail-row"),
+            Static(f"tmux: {tmux_session_name}", classes="detail-row"),
             Select(
                 options=[
-                    ("Yes - Create worktree and branch", True),
-                    ("No - Just update status", False)
+                    ("Yes - Create worktree", True),
+                    ("No - Status only", False)
                 ],
-                prompt="Create Git Worktree?",
+                prompt="Create Worktree?",
                 id="worktree-option",
                 value=True
             ),
-            Static("Note: A tmux session will be created in either case", classes="detail-row"),
             Container(
                 Button("Start", id="start-btn", variant="success"),
                 Button("Cancel", id="cancel-btn", variant="error"),
@@ -1018,7 +1006,7 @@ class TaskManagementScreen(Screen):
 
         table = self.query_one("#tasks-table", DataTable)
         table.clear()
-        table.add_columns("Source", "Task ID", "Project", "Repository", "Title", "Status", "Priority")
+        table.add_columns("Source", "Task ID", "Project", "Title", "Status", "Priority", "Tmux")
         table.cursor_type = "row"
 
         for task in tasks:
@@ -1040,14 +1028,18 @@ class TaskManagementScreen(Screen):
                 "low": "🟢"
             }.get(task.get('priority', 'medium'), "⚪")
 
+            # Tmux session indicator
+            tmux_session = task.get('tmux_session')
+            tmux_label = tmux_session[:20] if tmux_session else "-"
+
             table.add_row(
                 source_label,
                 task['task_id'],
                 task.get('project_name', '-')[:20],
-                task.get('repository_name', '-')[:15] if task.get('repository_name') else '-',
                 task.get('title', '-')[:30],
                 f"{status_icon} {task['status'].upper()}",
-                f"{priority_icon} {task['priority'].upper()}"
+                f"{priority_icon} {task['priority'].upper()}",
+                tmux_label
             )
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
@@ -1414,58 +1406,24 @@ class TaskDetailScreen(Screen):
         # Remove all existing children to avoid duplicate IDs
         container.remove_children()
 
+        # Build compact detail view for mobile
+        desc = self.task_data.get('description') or '-'
+        desc_short = desc[:50] + '...' if len(desc) > 50 else desc
+
         container.mount(
-            Static(f"📋 {self.task_id}: {self.task_data['title']}", classes="screen-title"),
-
-            # Task Information Section
-            Container(
-                Static("ℹ️  TASK INFORMATION", classes="widget-title"),
-                Static(f"Title: {self.task_data['title']}", classes="detail-row"),
-                Static(f"Description: {self.task_data.get('description') or 'No description'}", classes="detail-row"),
-                Static(f"Category: {self.task_data['category']}", classes="detail-row"),
-                Static(f"Type: {self.task_data['type']}", classes="detail-row"),
-                Static(f"Priority: {self.task_data['priority'].upper()}", classes="detail-row"),
-                classes="detail-section info-section"
-            ),
-
-            # Project & Repository Section
-            Container(
-                Static("📦 PROJECT & REPOSITORY", classes="widget-title"),
-                Static(f"Project: {self.task_data.get('project_name', 'Unknown')}", classes="detail-row"),
-                Static(f"Repository: {self.task_data.get('repository_name', 'None')}", classes="detail-row"),
-                Static(f"Repository Path: {self.task_data.get('repository_path', 'N/A')}", classes="detail-row"),
-                classes="detail-section project-section"
-            ),
-
-            # Status & Progress Section (with quick edit hints)
-            Container(
-                Static("📊 STATUS & PROGRESS", classes="widget-title"),
-                Static(f"[1] Status: {self._format_status(self.task_data['status'])} (press 1 to cycle)", classes="detail-row"),
-                Static(f"[2] Priority: {self.task_data['priority'].upper()} (press 2 to cycle)", classes="detail-row"),
-                Static(f"[3] Category: {self.task_data['category']} (press 3 to cycle)", classes="detail-row"),
-                Static(f"Phase: {self.task_data.get('phase') or 'Not started'}", classes="detail-row"),
-                Static(f"Agent Type: {self.task_data.get('agent_type') or 'Not assigned'}", classes="detail-row"),
-                Static(f"Commits: {self.task_data.get('commits', 0)}", classes="detail-row"),
-                classes="detail-section status-section"
-            ),
-
-            # Timestamps Section
-            Container(
-                Static("🕒 TIMESTAMPS", classes="widget-title"),
-                Static(f"Created: {self._format_timestamp(self.task_data.get('created_at'))}", classes="detail-row"),
-                Static(f"Started: {self._format_timestamp(self.task_data.get('started_at'))}", classes="detail-row"),
-                Static(f"Completed: {self._format_timestamp(self.task_data.get('completed_at'))}", classes="detail-row"),
-                classes="detail-section timestamps-section"
-            ),
-
-            # Git & Session Section
-            Container(
-                Static("🔧 GIT & SESSION", classes="widget-title"),
-                Static(f"Branch: {self.task_data.get('git_branch') or 'Not created'}", classes="detail-row"),
-                Static(f"Worktree: {self.task_data.get('worktree_path') or 'Not created'}", classes="detail-row"),
-                Static(f"tmux Session: {self.task_data.get('tmux_session') or 'Not running'}", classes="detail-row"),
-                classes="detail-section session-section"
-            ),
+            Static(f"📋 {self.task_id}", classes="screen-title"),
+            # Compact single-section layout
+            Static(f"Title: {self.task_data['title']}", classes="detail-row"),
+            Static(f"Desc: {desc_short}", classes="detail-row"),
+            Static(f"Project: {self.task_data.get('project_name', '-')} | Repo: {self.task_data.get('repository_name') or '-'}", classes="detail-row"),
+            Static(f"[1] Status: {self._format_status(self.task_data['status'])}", classes="detail-row"),
+            Static(f"[2] Priority: {self.task_data['priority'].upper()} | [3] Category: {self.task_data['category']}", classes="detail-row"),
+            Static(f"Type: {self.task_data['type']} | Phase: {self.task_data.get('phase') or '-'}", classes="detail-row"),
+            Static(f"Agent: {self.task_data.get('agent_type') or '-'} | Commits: {self.task_data.get('commits', 0)}", classes="detail-row"),
+            Static(f"Created: {self._format_timestamp(self.task_data.get('created_at'))} | Started: {self._format_timestamp(self.task_data.get('started_at'))}", classes="detail-row"),
+            Static(f"Branch: {self.task_data.get('git_branch') or '-'}", classes="detail-row"),
+            Static(f"Worktree: {self.task_data.get('worktree_path') or '-'}", classes="detail-row"),
+            Static(f"tmux: {self.task_data.get('tmux_session') or '-'}", classes="detail-row"),
         )
 
     def _format_status(self, status: str) -> str:
@@ -1742,7 +1700,7 @@ class AgentDashboard(App):
     .widget-title {
         background: $boost;
         color: $text;
-        padding: 1;
+        padding: 0;
         text-align: center;
         text-style: bold;
     }
@@ -1788,45 +1746,45 @@ class AgentDashboard(App):
         height: 1fr;
     }
 
-    /* Modal styles */
+    /* Modal styles - compact for mobile */
     #create-project-modal, #create-repo-modal, #edit-project-modal, #edit-repo-modal, #create-task-modal, #edit-task-modal, #start-task-modal {
         align: center middle;
         width: 60;
         height: auto;
         border: solid $accent;
         background: $surface;
-        padding: 1 2;
+        padding: 0 1;
     }
 
     Select {
-        margin: 1 0;
+        margin: 0;
     }
 
     #modal-title {
         text-align: center;
         text-style: bold;
-        padding: 1;
+        padding: 0;
         color: $accent;
     }
 
     Input {
-        margin: 1 0;
+        margin: 0;
     }
 
     .button-row {
         align: center middle;
-        margin-top: 1;
+        margin-top: 0;
     }
 
     Button {
         margin: 0 1;
     }
 
-    /* Screen styles */
+    /* Screen styles - compact for mobile */
     .screen-title {
         text-align: center;
         text-style: bold;
-        padding: 1;
+        padding: 0;
         background: $boost;
         color: $text;
     }
@@ -1841,11 +1799,11 @@ class AgentDashboard(App):
 
     #repos-section, #tasks-section {
         border: solid $accent;
-        margin: 1;
+        margin: 0;
         height: 1fr;
     }
 
-    /* Task detail styles */
+    /* Task detail styles - compact for mobile */
     #task-detail-container {
         height: 100%;
         overflow-y: auto;
@@ -1853,17 +1811,18 @@ class AgentDashboard(App):
 
     #task-detail-content {
         height: auto;
+        padding: 0;
     }
 
     .detail-section {
         border: solid $accent;
-        margin: 1;
-        padding: 1;
+        margin: 0;
+        padding: 0;
     }
 
     .detail-row {
-        padding: 0 1;
-        margin-top: 0;
+        padding: 0;
+        margin: 0;
     }
     """
 
