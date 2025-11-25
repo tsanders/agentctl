@@ -13,6 +13,8 @@ from agentctl.core.agent_monitor import (
     get_all_agent_statuses,
     get_agent_status,
     get_health_display,
+    capture_session_output,
+    tail_session_output,
     HEALTH_ICONS,
 )
 
@@ -223,6 +225,52 @@ def attach(
 
     # Execute tmux attach
     subprocess.run(["tmux", "attach", "-t", tmux_session])
+
+
+@app.command()
+def logs(
+    task_id: str = typer.Argument(..., help="Task ID to view logs for"),
+    lines: int = typer.Option(100, "--lines", "-n", help="Number of lines to show"),
+    follow: bool = typer.Option(False, "--follow", "-f", help="Follow output (like tail -f)"),
+):
+    """View or tail agent output from a task's tmux session"""
+    # Get task to find tmux session
+    task = database.get_task(task_id)
+    if not task:
+        console.print(f"[red]Error:[/red] Task '{task_id}' not found")
+        raise typer.Exit(1)
+
+    tmux_session = task.get("tmux_session")
+    if not tmux_session:
+        console.print(f"[red]Error:[/red] Task '{task_id}' has no tmux session")
+        console.print(f"Start the task first with: [cyan]agentctl task start {task_id}[/cyan]")
+        raise typer.Exit(1)
+
+    # Check if session exists
+    from agentctl.core.tmux import session_exists
+    if not session_exists(tmux_session):
+        console.print(f"[red]Error:[/red] tmux session '{tmux_session}' not found")
+        console.print("The session may have been closed.")
+        raise typer.Exit(1)
+
+    if follow:
+        # Tail mode - stream output
+        console.print(f"[dim]Tailing output from {tmux_session} (Ctrl+C to stop)...[/dim]\n")
+        try:
+            for line in tail_session_output(tmux_session, lines=lines, interval=0.3):
+                console.print(line)
+        except KeyboardInterrupt:
+            console.print("\n[dim]Stopped tailing[/dim]")
+    else:
+        # One-shot mode - show last N lines
+        output = capture_session_output(tmux_session, lines=lines)
+        if not output:
+            console.print("[dim]No output captured[/dim]")
+            return
+
+        console.print(f"[dim]Last {len(output)} lines from {tmux_session}:[/dim]\n")
+        for line in output:
+            console.print(line)
 
 
 # Task management commands

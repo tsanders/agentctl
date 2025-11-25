@@ -1792,15 +1792,15 @@ class AgentCard(Static):
 
         # Get multiple lines of recent output
         recent_lines = agent.get("recent_output", [])
-        # Filter to non-empty lines and get last 5
-        non_empty = [line for line in recent_lines if line.strip()][-5:]
+        # Filter to non-empty lines and get last 10
+        non_empty = [line for line in recent_lines if line.strip()][-10:]
         output_text = "\n".join(non_empty) if non_empty else "(no output)"
 
         # Truncate each line if too long
         output_lines = []
         for line in output_text.split("\n"):
-            if len(line) > 70:
-                line = line[:67] + "..."
+            if len(line) > 100:
+                line = line[:97] + "..."
             output_lines.append(line)
         output_text = "\n".join(output_lines)
 

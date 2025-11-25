@@ -73,15 +73,104 @@ def get_session_pane(session_name: str) -> Optional[libtmux.Pane]:
     return windows[0].active_pane
 
 
-def capture_pane_output(pane: libtmux.Pane, lines: int = 50) -> List[str]:
-    """Capture recent output from a tmux pane"""
+def capture_pane_output(pane: libtmux.Pane, lines: int = 100) -> List[str]:
+    """Capture recent output from a tmux pane using subprocess for better compatibility
+
+    Args:
+        pane: The tmux pane to capture from (used for pane_id)
+        lines: Number of lines to capture (default 100)
+
+    Returns:
+        List of output lines
+    """
+    import subprocess
+
     try:
-        output = pane.capture_pane(start=-lines, end=-1)
-        if isinstance(output, str):
-            return output.split('\n')
-        return output if output else []
+        # Use tmux capture-pane directly with -p flag to print to stdout
+        # This captures the alternate screen buffer (used by TUI apps like Claude)
+        result = subprocess.run(
+            ['tmux', 'capture-pane', '-t', pane.id, '-p', '-S', f'-{lines}'],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode == 0:
+            return result.stdout.split('\n')
+        return []
     except Exception:
         return []
+
+
+def capture_session_output(session_name: str, lines: int = 100) -> List[str]:
+    """Capture recent output from a tmux session by name
+
+    Args:
+        session_name: The tmux session name
+        lines: Number of lines to capture (default 100)
+
+    Returns:
+        List of output lines, or empty list if session not found
+    """
+    import subprocess
+
+    try:
+        # Use tmux capture-pane directly with session target
+        # -p prints to stdout, -S sets start line (negative = from end)
+        result = subprocess.run(
+            ['tmux', 'capture-pane', '-t', session_name, '-p', '-S', f'-{lines}'],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode == 0:
+            return result.stdout.split('\n')
+        return []
+    except Exception:
+        return []
+
+
+def tail_session_output(session_name: str, lines: int = 100, interval: float = 0.5):
+    """Generator that yields new output lines from a tmux session
+
+    Args:
+        session_name: The tmux session name
+        lines: Initial number of lines to capture
+        interval: Polling interval in seconds
+
+    Yields:
+        New output lines as they appear
+    """
+    # Get initial output
+    last_output = capture_session_output(session_name, lines)
+    if not last_output:
+        return
+
+    last_hash = hash(tuple(last_output))
+
+    # Yield initial output
+    for line in last_output:
+        yield line
+
+    # Poll for changes
+    while True:
+        time.sleep(interval)
+
+        current_output = capture_session_output(session_name, lines)
+        if not current_output:
+            return  # Session closed
+
+        current_hash = hash(tuple(current_output))
+
+        if current_hash != last_hash:
+            # Find new lines by comparing from the end
+            # This is a simple approach - just yield lines that weren't in last output
+            last_set = set(last_output[-50:])  # Compare last 50 lines
+            for line in current_output:
+                if line not in last_set:
+                    yield line
+
+            last_output = current_output
+            last_hash = current_hash
 
 
 def get_session_status(session_name: str) -> Dict:
