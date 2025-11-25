@@ -499,6 +499,49 @@ def task_sync_cmd(
             console.print("Run [cyan]agentctl task validate[/cyan] for details")
 
 
+@task_app.command("refresh")
+def task_refresh(
+    task_id: str = typer.Argument(..., help="Task ID to refresh TASK.md for"),
+):
+    """Re-copy source task file to working directory TASK.md"""
+    from pathlib import Path
+    from agentctl.core.task import copy_task_file_to_workdir
+
+    # Get task to find working directory
+    task = database.get_task(task_id)
+    if not task:
+        console.print(f"[red]Error:[/red] Task '{task_id}' not found")
+        raise typer.Exit(1)
+
+    # Determine working directory
+    if task.get('worktree_path'):
+        work_dir = Path(task['worktree_path'])
+    elif task.get('repository_id'):
+        repo = database.get_repository(task['repository_id'])
+        if repo:
+            work_dir = Path(repo['path'])
+        else:
+            console.print(f"[red]Error:[/red] Repository not found for task")
+            raise typer.Exit(1)
+    else:
+        console.print(f"[red]Error:[/red] No working directory found for task")
+        console.print("Task needs a repository or worktree configured")
+        raise typer.Exit(1)
+
+    if not work_dir.exists():
+        console.print(f"[red]Error:[/red] Working directory does not exist: {work_dir}")
+        raise typer.Exit(1)
+
+    # Copy the task file
+    result = copy_task_file_to_workdir(task_id, work_dir)
+
+    if result:
+        console.print(f"✓ Refreshed [cyan]TASK.md[/cyan] in {work_dir}")
+    else:
+        console.print(f"[red]Error:[/red] Failed to copy task file")
+        raise typer.Exit(1)
+
+
 # Agent management commands
 agent_app = typer.Typer(help="Agent management commands")
 app.add_typer(agent_app, name="agent")

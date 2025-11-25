@@ -4,6 +4,8 @@ from pathlib import Path
 from typing import Optional, Dict
 from datetime import datetime
 
+import shutil
+
 from agentctl.core import database, task_md, task_sync
 from agentctl.core.tmux import create_session, session_exists
 from agentctl.core.git import create_branch, get_current_branch
@@ -77,6 +79,75 @@ class Task:
         return None
 
 
+def copy_task_file_to_workdir(task_id: str, work_dir: Path) -> Optional[Path]:
+    """
+    Copy source task markdown to TASK.md in working directory.
+
+    Args:
+        task_id: Task ID
+        work_dir: Target working directory
+
+    Returns:
+        Path to the created TASK.md, or None if source not found
+    """
+    task_data = database.get_task(task_id)
+    if not task_data:
+        return None
+
+    dest_path = work_dir / "TASK.md"
+
+    if task_data.get('source') == 'markdown':
+        # Copy from markdown source file
+        project = database.get_project(task_data['project_id'])
+        if not project or not project.get('tasks_path'):
+            return None
+
+        source_path = Path(project['tasks_path']) / f"{task_id}.md"
+        if not source_path.exists():
+            return None
+
+        shutil.copy2(source_path, dest_path)
+    else:
+        # Generate markdown from database fields
+        content = _generate_task_markdown(task_data)
+        dest_path.write_text(content, encoding='utf-8')
+
+    return dest_path
+
+
+def _generate_task_markdown(task_data: Dict) -> str:
+    """Generate markdown content from database task data."""
+    import frontmatter
+
+    # Build frontmatter data
+    fm_data = {
+        'id': task_data.get('id'),
+        'title': task_data.get('title'),
+        'project_id': task_data.get('project_id'),
+        'repository_id': task_data.get('repository_id'),
+        'category': task_data.get('category'),
+        'type': task_data.get('type'),
+        'priority': task_data.get('priority'),
+        'status': task_data.get('status'),
+        'phase': task_data.get('phase'),
+        'created_at': task_data.get('created_at'),
+        'started_at': task_data.get('started_at'),
+        'completed_at': task_data.get('completed_at'),
+        'git_branch': task_data.get('git_branch'),
+        'tmux_session': task_data.get('tmux_session'),
+        'agent_type': task_data.get('agent_type'),
+        'commits': task_data.get('commits', 0),
+    }
+
+    # Build body
+    title = task_data.get('title', 'Untitled Task')
+    description = task_data.get('description', '')
+    body = f"# {title}\n\n{description}"
+
+    post = frontmatter.Post(body, **fm_data)
+    return frontmatter.dumps(post)
+
+
 def start_task(task_id: str, agent_type: Optional[str] = None, working_dir: Optional[Path] = None) -> Task:
     """Initialize and start a new task"""
     task = Task(task_id)
@@ -124,6 +195,9 @@ def start_task(task_id: str, agent_type: Optional[str] = None, working_dir: Opti
             tmux_session=session,
             agent_type=agent_type or 'claude-code'
         )
+
+    # Copy task file to working directory
+    copy_task_file_to_workdir(task_id, work_dir)
 
     # Log event
     database.add_event(task_id, 'task_started', {'branch': branch, 'session': session})
