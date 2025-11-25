@@ -46,7 +46,7 @@ def init_db():
             type TEXT NOT NULL,
             title TEXT NOT NULL,
             description TEXT,
-            status TEXT NOT NULL DEFAULT 'queued',
+            agent_status TEXT NOT NULL DEFAULT 'queued',
             priority TEXT NOT NULL DEFAULT 'medium',
             phase TEXT,
             created_at INTEGER NOT NULL,
@@ -90,7 +90,7 @@ def init_db():
             FOREIGN KEY (task_id) REFERENCES tasks(id)
         );
 
-        CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+        CREATE INDEX IF NOT EXISTS idx_tasks_agent_status ON tasks(agent_status);
         CREATE INDEX IF NOT EXISTS idx_tasks_priority ON tasks(priority);
         CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id);
         CREATE INDEX IF NOT EXISTS idx_tasks_source ON tasks(source);
@@ -123,7 +123,7 @@ def get_active_agents() -> List[Dict]:
         SELECT
             t.id as task_id,
             p.name as project,
-            t.status,
+            t.agent_status,
             t.phase,
             t.agent_type,
             t.commits,
@@ -131,7 +131,7 @@ def get_active_agents() -> List[Dict]:
             CAST((julianday('now') - julianday(t.started_at, 'unixepoch')) * 24 * 60 AS INTEGER) as elapsed_minutes
         FROM tasks t
         LEFT JOIN projects p ON t.project_id = p.id
-        WHERE t.status IN ('running', 'blocked')
+        WHERE t.agent_status IN ('running', 'blocked')
         ORDER BY t.started_at DESC
     """)
 
@@ -142,7 +142,7 @@ def get_active_agents() -> List[Dict]:
         agents.append({
             'task_id': row['task_id'],
             'project': row['project'],
-            'status': row['status'],
+            'agent_status': row['agent_status'],
             'phase': row['phase'] or 'unknown',
             'agent_type': row['agent_type'] or 'unknown',
             'commits': row['commits'] or 0,
@@ -163,7 +163,7 @@ def get_queued_tasks() -> List[Dict]:
         SELECT t.id, p.name as project, t.category, t.priority, t.title
         FROM tasks t
         LEFT JOIN projects p ON t.project_id = p.id
-        WHERE t.status = 'queued'
+        WHERE t.agent_status = 'queued'
         ORDER BY
             CASE t.priority
                 WHEN 'high' THEN 1
@@ -179,7 +179,7 @@ def get_queued_tasks() -> List[Dict]:
 
 
 def query_tasks(
-    status: Optional[str] = None,
+    agent_status: Optional[str] = None,
     priority: Optional[str] = None,
     project: Optional[str] = None
 ) -> List[Dict]:
@@ -190,9 +190,9 @@ def query_tasks(
     conditions = []
     params = []
 
-    if status:
-        conditions.append("t.status = ?")
-        params.append(status)
+    if agent_status:
+        conditions.append("t.agent_status = ?")
+        params.append(agent_status)
     if priority:
         conditions.append("t.priority = ?")
         params.append(priority)
@@ -206,7 +206,7 @@ def query_tasks(
         SELECT
             t.id as task_id,
             t.title,
-            t.status,
+            t.agent_status,
             t.priority,
             t.phase,
             CAST((julianday('now') - julianday(t.started_at, 'unixepoch')) * 24 * 60 AS INTEGER) as waiting_minutes
@@ -302,13 +302,13 @@ def get_task(task_id: str) -> Optional[Dict]:
     return dict(row) if row else None
 
 
-def update_task_status(task_id: str, status: str, **kwargs):
-    """Update task status and optional fields"""
+def update_task_status(task_id: str, agent_status: str, **kwargs):
+    """Update task agent_status and optional fields"""
     conn = get_connection()
     cursor = conn.cursor()
 
-    set_clauses = ["status = ?"]
-    params = [status]
+    set_clauses = ["agent_status = ?"]
+    params = [agent_status]
 
     for key, value in kwargs.items():
         set_clauses.append(f"{key} = ?")
@@ -359,7 +359,7 @@ def delete_task(task_id: str) -> None:
     conn.close()
 
 
-def list_all_tasks(status: Optional[str] = None, priority: Optional[str] = None) -> List[Dict]:
+def list_all_tasks(agent_status: Optional[str] = None, priority: Optional[str] = None) -> List[Dict]:
     """List all tasks with optional filters, joined with project and repository info"""
     conn = get_connection()
     cursor = conn.cursor()
@@ -367,9 +367,9 @@ def list_all_tasks(status: Optional[str] = None, priority: Optional[str] = None)
     conditions = []
     params = []
 
-    if status:
-        conditions.append("t.status = ?")
-        params.append(status)
+    if agent_status:
+        conditions.append("t.agent_status = ?")
+        params.append(agent_status)
     if priority:
         conditions.append("t.priority = ?")
         params.append(priority)
@@ -381,7 +381,7 @@ def list_all_tasks(status: Optional[str] = None, priority: Optional[str] = None)
             t.id as task_id,
             t.title,
             t.description,
-            t.status,
+            t.agent_status,
             t.priority,
             t.category,
             t.type,

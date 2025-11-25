@@ -26,7 +26,7 @@ Migrate from SQLite-only task storage to markdown files as the source of truth, 
 
 2. **Task Sync Layer** (`src/agentctl/core/task_sync.py`)
    - Scan project tasks_path for `.md` files matching pattern
-   - Sync markdown → database index (id, status, priority only)
+   - Sync markdown → database index (id, agent_status, priority only)
    - Track sync errors for display in TUI
    - Provide validation command
 
@@ -49,7 +49,7 @@ repository_id: RRA-API
 category: FEATURE
 type: feature
 priority: medium
-status: queued
+agent_status: queued
 phase: null
 created_at: "2025-01-22T10:30:00"
 started_at: null
@@ -73,7 +73,7 @@ Detailed task description goes here...
 - `title`: Task title
 - `project_id`: Project identifier
 - `category`: One of FEATURE, BUG, REFACTOR, DOCS, TEST, CHORE
-- `status`: One of queued, running, blocked, completed, failed
+- `agent_status`: One of queued, running, blocked, completed, failed
 - `priority`: One of high, medium, low
 - `created_at`: ISO 8601 timestamp
 
@@ -139,7 +139,7 @@ CREATE TABLE task_sync_errors (
 
 Only sync these fields to database for fast filtering:
 - id
-- status
+- agent_status
 - priority
 - project_id
 - repository_id
@@ -290,10 +290,10 @@ agentctl project create RRA \
 ### Field Validation
 
 **Required fields must be present:**
-- id, title, project_id, category, status, priority, created_at
+- id, title, project_id, category, agent_status, priority, created_at
 
 **Valid enum values:**
-- status: queued, running, blocked, completed, failed
+- agent_status: queued, running, blocked, completed, failed
 - priority: high, medium, low
 - category: FEATURE, BUG, REFACTOR, DOCS, TEST, CHORE
 

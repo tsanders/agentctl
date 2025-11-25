@@ -26,7 +26,7 @@ app = typer.Typer(
 console = Console()
 
 
-class TaskStatus(str, Enum):
+class AgentStatus(str, Enum):
     RUNNING = "running"
     BLOCKED = "blocked"
     QUEUED = "queued"
@@ -63,8 +63,8 @@ def status():
     # Status summary
     console.print("\n🤖 [bold cyan]AGENT STATUS[/bold cyan]")
     console.print("━" * 60)
-    console.print(f"Active:   [green]{len([a for a in agents if a['status'] == 'running'])}[/green] agents running")
-    console.print(f"Blocked:  [yellow]{len([a for a in agents if a['status'] == 'blocked'])}[/yellow] awaiting review")
+    console.print(f"Active:   [green]{len([a for a in agents if a['agent_status'] == 'running'])}[/green] agents running")
+    console.print(f"Blocked:  [yellow]{len([a for a in agents if a['agent_status'] == 'blocked'])}[/yellow] awaiting review")
     console.print(f"Queued:   [blue]{len(queued)}[/blue] tasks pending")
     console.print("━" * 60)
     console.print()
@@ -83,14 +83,14 @@ def status():
                 "running": "🟢",
                 "blocked": "🟡",
                 "failed": "🔴"
-            }.get(agent['status'], "⚪")
+            }.get(agent['agent_status'], "⚪")
 
             table.add_row(
                 agent['task_id'],
                 agent['phase'],
                 agent['elapsed'],
                 str(agent['commits']),
-                f"{status_icon} {agent['status'].upper()}"
+                f"{status_icon} {agent['agent_status'].upper()}"
             )
 
         console.print(table)
@@ -98,7 +98,7 @@ def status():
         console.print("[dim]No active agents[/dim]")
 
     # Next action hint
-    blocked = [a for a in agents if a['status'] == 'blocked']
+    blocked = [a for a in agents if a['agent_status'] == 'blocked']
     if blocked:
         console.print(f"\n💡 [bold yellow]Next action:[/bold yellow] Review {blocked[0]['task_id']}")
         console.print(f"   Run: [cyan]agentctl review next[/cyan]\n")
@@ -156,7 +156,7 @@ def agents(
             table.add_row(
                 agent["task_id"],
                 f"[{health_color}]{health_display}[/{health_color}]",
-                agent.get("task_status", "-"),
+                agent.get("task_agent_status", "-"),
                 output,
             )
 
@@ -310,13 +310,13 @@ def task_start(
 
 @task_app.command("list")
 def task_list(
-    status: Optional[TaskStatus] = typer.Option(None, help="Filter by status"),
+    agent_status: Optional[AgentStatus] = typer.Option(None, "--status", help="Filter by agent_status"),
     priority: Optional[TaskPriority] = typer.Option(None, help="Filter by priority"),
     project: Optional[str] = typer.Option(None, help="Filter by project"),
 ):
     """List tasks with optional filters"""
     tasks = database.query_tasks(
-        status=status.value if status else None,
+        agent_status=agent_status.value if agent_status else None,
         priority=priority.value if priority else None,
         project=project
     )
@@ -341,7 +341,7 @@ def task_list(
 
         table.add_row(
             task['task_id'],
-            task.get('status', 'unknown'),
+            task.get('agent_status', 'unknown'),
             f"[{priority_color}]{task.get('priority', 'medium').upper()}[/{priority_color}]",
             task.get('phase') or "-",
             task.get('waiting_time') or "-"
@@ -568,7 +568,7 @@ def agent_list():
         table.add_row(
             agent['task_id'],
             agent['agent_type'],
-            agent['status'],
+            agent['agent_status'],
             agent['phase'],
             agent['elapsed'],
             agent['tmux_session'] or "-"

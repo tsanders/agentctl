@@ -178,7 +178,7 @@ def _upsert_task_to_database(task_data: Dict) -> None:
     # Only store indexed fields in database
     cursor.execute("""
         INSERT OR REPLACE INTO tasks (
-            id, project_id, repository_id, category, status, priority, source,
+            id, project_id, repository_id, category, agent_status, priority, source,
             title, type, description, phase, created_at, started_at, completed_at,
             git_branch, worktree_path, tmux_session, agent_type, commits
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -187,7 +187,7 @@ def _upsert_task_to_database(task_data: Dict) -> None:
         task_data['project_id'],
         task_data.get('repository_id'),
         task_data['category'],
-        task_data['status'],
+        task_data['agent_status'],
         task_data['priority'],
         'markdown',  # source
         task_data['title'],

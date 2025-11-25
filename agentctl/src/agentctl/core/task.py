@@ -27,7 +27,7 @@ class Task:
         self.repository_id = task_data.get('repository_id')
         self.category = task_data['category']
         self.title = task_data['title']
-        self.status = task_data['status']
+        self.agent_status = task_data['agent_status']
         self.priority = task_data['priority']
         self.phase = task_data.get('phase')
 
@@ -128,7 +128,7 @@ def _generate_task_markdown(task_data: Dict) -> str:
         'category': task_data.get('category'),
         'type': task_data.get('type'),
         'priority': task_data.get('priority'),
-        'status': task_data.get('status'),
+        'agent_status': task_data.get('agent_status'),
         'phase': task_data.get('phase'),
         'created_at': task_data.get('created_at'),
         'started_at': task_data.get('started_at'),
@@ -171,12 +171,12 @@ def start_task(task_id: str, agent_type: Optional[str] = None, working_dir: Opti
     except Exception as e:
         raise RuntimeError(f"Failed to create tmux session: {e}")
 
-    # Update task status (check if markdown or database)
+    # Update task agent_status (check if markdown or database)
     task_data = database.get_task(task_id)
     if task_data and task_data.get('source') == 'markdown':
         # Update markdown task
         updates = {
-            'status': 'running',
+            'agent_status': 'running',
             'phase': 'planning',
             'started_at': datetime.now().isoformat(),
             'git_branch': branch,
@@ -188,7 +188,7 @@ def start_task(task_id: str, agent_type: Optional[str] = None, working_dir: Opti
         # Update database task
         database.update_task_status(
             task_id=task_id,
-            status='running',
+            agent_status='running',
             phase='planning',
             started_at=int(datetime.now().timestamp()),
             git_branch=branch,
@@ -209,7 +209,7 @@ def pause_task(task_id: str):
     """Pause a running task"""
     task_data = database.get_task(task_id)
     if task_data and task_data.get('source') == 'markdown':
-        update_markdown_task(task_id, {'status': 'paused'})
+        update_markdown_task(task_id, {'agent_status': 'paused'})
     else:
         database.update_task_status(task_id, 'paused')
     database.add_event(task_id, 'task_paused')
@@ -219,7 +219,7 @@ def resume_task(task_id: str):
     """Resume a paused task"""
     task_data = database.get_task(task_id)
     if task_data and task_data.get('source') == 'markdown':
-        update_markdown_task(task_id, {'status': 'running'})
+        update_markdown_task(task_id, {'agent_status': 'running'})
     else:
         database.update_task_status(task_id, 'running')
     database.add_event(task_id, 'task_resumed')
@@ -230,7 +230,7 @@ def complete_task(task_id: str):
     task_data = database.get_task(task_id)
     if task_data and task_data.get('source') == 'markdown':
         updates = {
-            'status': 'completed',
+            'agent_status': 'completed',
             'completed_at': datetime.now().isoformat()
         }
         update_markdown_task(task_id, updates)
@@ -245,7 +245,7 @@ def complete_task(task_id: str):
 
 def get_next_review() -> Optional[Dict]:
     """Get next task needing review"""
-    tasks = database.query_tasks(status='blocked')
+    tasks = database.query_tasks(agent_status='blocked')
 
     if not tasks:
         return None

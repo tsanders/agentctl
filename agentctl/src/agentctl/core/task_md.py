@@ -9,11 +9,11 @@ import re
 
 # Required fields for task frontmatter
 REQUIRED_FIELDS = [
-    'id', 'title', 'project_id', 'category', 'status', 'priority', 'created_at'
+    'id', 'title', 'project_id', 'category', 'agent_status', 'priority', 'created_at'
 ]
 
 # Valid enum values
-VALID_STATUS = ['queued', 'running', 'blocked', 'completed', 'failed']
+VALID_AGENT_STATUS = ['queued', 'running', 'blocked', 'completed', 'failed']
 VALID_PRIORITY = ['high', 'medium', 'low']
 VALID_CATEGORY = ['FEATURE', 'BUG', 'REFACTOR', 'DOCS', 'TEST', 'CHORE']
 
@@ -75,9 +75,9 @@ def validate_task_data(data: Dict) -> List[str]:
     if not re.match(r'^[A-Z]+-[A-Z]+-\d{4}$', str(data['id'])):
         errors.append(f"Invalid id format: {data['id']} (expected PROJECT-CATEGORY-NNNN)")
 
-    # Validate status
-    if data['status'] not in VALID_STATUS:
-        errors.append(f"Invalid status: {data['status']} (must be one of: {', '.join(VALID_STATUS)})")
+    # Validate agent_status
+    if data['agent_status'] not in VALID_AGENT_STATUS:
+        errors.append(f"Invalid agent_status: {data['agent_status']} (must be one of: {', '.join(VALID_AGENT_STATUS)})")
 
     # Validate priority
     if data['priority'] not in VALID_PRIORITY:
@@ -167,7 +167,7 @@ def generate_task_template(
         'category': category,
         'type': task_type,
         'priority': priority,
-        'status': 'queued',
+        'agent_status': 'queued',
         'phase': None,
         'created_at': datetime.now().isoformat(),
         'started_at': None,

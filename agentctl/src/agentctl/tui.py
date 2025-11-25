@@ -40,12 +40,12 @@ class AgentStatusWidget(Static):
                 "running": "🟢",
                 "blocked": "🟡",
                 "failed": "🔴"
-            }.get(agent['status'], "⚪")
+            }.get(agent['agent_status'], "⚪")
 
             table.add_row(
                 agent['task_id'],
                 agent['project'],
-                f"{status_icon} {agent['status'].upper()}",
+                f"{status_icon} {agent['agent_status'].upper()}",
                 agent['phase'],
                 agent['elapsed'],
                 str(agent['commits'])
@@ -142,8 +142,8 @@ class ProjectStatsWidget(Static):
 [bold]Active Agents:[/bold] {len(agents)}
 [bold]Queued Tasks:[/bold] {len(queued)}
 
-[bold cyan]Running:[/bold cyan] {len([a for a in agents if a['status'] == 'running'])}
-[bold yellow]Blocked:[/bold yellow] {len([a for a in agents if a['status'] == 'blocked'])}
+[bold cyan]Running:[/bold cyan] {len([a for a in agents if a['agent_status'] == 'running'])}
+[bold yellow]Blocked:[/bold yellow] {len([a for a in agents if a['agent_status'] == 'blocked'])}
 """
 
         content = self.query_one("#stats-content", Static)
@@ -600,9 +600,9 @@ class EditTaskModal(ModalScreen):
                     ("Completed", "completed"),
                     ("Failed", "failed")
                 ],
-                prompt="Status",
-                id="task-status",
-                value=self.task_data['status']
+                prompt="Agent Status",
+                id="task-agent-status",
+                value=self.task_data['agent_status']
             ),
             Container(
                 Button("Save", id="save-btn", variant="success"),
@@ -627,7 +627,7 @@ class EditTaskModal(ModalScreen):
             category = self.query_one("#task-category", Select).value
             task_type = self.query_one("#task-type", Input).value
             priority = self.query_one("#task-priority", Select).value
-            status = self.query_one("#task-status", Select).value
+            agent_status = self.query_one("#task-agent-status", Select).value
 
             if not title or not project_id:
                 self.app.notify("Title and Project are required", severity="error")
@@ -651,7 +651,7 @@ class EditTaskModal(ModalScreen):
                         'category': category,
                         'type': task_type.strip(),
                         'priority': priority,
-                        'status': status
+                        'agent_status': agent_status
                     }
                     success = update_markdown_task(self.task_id, updates)
                     if not success:
@@ -668,7 +668,7 @@ class EditTaskModal(ModalScreen):
                         category=category,
                         type=task_type.strip(),
                         priority=priority,
-                        status=status
+                        agent_status=agent_status
                     )
 
                 database.add_event(self.task_id, "updated")
@@ -771,15 +771,15 @@ class StartTaskModal(ModalScreen):
                 # Check if this is a markdown task
                 task_source = self.task_data.get('source', 'database')
                 if task_source == 'markdown':
-                    # Update markdown task status
+                    # Update markdown task agent_status
                     from datetime import datetime as dt
                     updates = {
-                        'status': 'running',
+                        'agent_status': 'running',
                         'started_at': dt.now().isoformat()
                     }
                     update_markdown_task(self.task_id, updates)
                 else:
-                    # Update database task status
+                    # Update database task agent_status
                     database.update_task_status(
                         self.task_id,
                         "running",
@@ -943,7 +943,7 @@ class ProjectDetailScreen(Screen):
             table.add_row(
                 task['task_id'],
                 task.get('title', '-')[:40],
-                task['status'],
+                task['agent_status'],
                 task.get('priority', 'medium').upper()
             )
 
@@ -1053,7 +1053,7 @@ class TaskManagementScreen(Screen):
                 "blocked": "🟡",
                 "completed": "✅",
                 "failed": "🔴"
-            }.get(task.get('status', 'queued'), "⚪")
+            }.get(task.get('agent_status', 'queued'), "⚪")
 
             priority_icon = {
                 "high": "🔴",
@@ -1504,7 +1504,7 @@ class TaskDetailScreen(Screen):
             Static(f"Title: {self.task_data['title']}", classes="detail-row"),
             Static(f"Desc: {desc_short}", classes="detail-row"),
             Static(f"Project: {self.task_data.get('project_name', '-')} | Repo: {self.task_data.get('repository_name') or '-'}", classes="detail-row"),
-            Static(f"[1] Status: {self._format_status(self.task_data['status'])}", classes="detail-row"),
+            Static(f"[1] Status: {self._format_status(self.task_data['agent_status'])}", classes="detail-row"),
             Static(f"[2] Priority: {self.task_data['priority'].upper()} | [3] Category: {self.task_data['category']}", classes="detail-row"),
             Static(f"Type: {self.task_data['type']} | Phase: {self.task_data.get('phase') or '-'}", classes="detail-row"),
             Static(agent_status_line, classes="detail-row"),
@@ -1590,8 +1590,8 @@ class TaskDetailScreen(Screen):
 
     def action_start_task(self) -> None:
         """Open start modal to begin work on task"""
-        if self.task_data['status'] in ['running', 'completed']:
-            self.app.notify(f"Task is already {self.task_data['status']}", severity="warning")
+        if self.task_data['agent_status'] in ['running', 'completed']:
+            self.app.notify(f"Task is already {self.task_data['agent_status']}", severity="warning")
             return
 
         def check_result(result):
@@ -1625,7 +1625,7 @@ class TaskDetailScreen(Screen):
 
     def action_complete_task(self) -> None:
         """Mark task as completed"""
-        if self.task_data['status'] == 'completed':
+        if self.task_data['agent_status'] == 'completed':
             self.app.notify("Task is already completed", severity="information")
             return
 
@@ -1636,7 +1636,7 @@ class TaskDetailScreen(Screen):
         if task_source == 'markdown':
             # Update markdown task
             updates = {
-                'status': 'completed',
+                'agent_status': 'completed',
                 'completed_at': datetime.now().isoformat()
             }
             success = update_markdown_task(self.task_id, updates)
@@ -1674,13 +1674,13 @@ class TaskDetailScreen(Screen):
         self.app.pop_screen()
 
     def action_cycle_status(self) -> None:
-        """Cycle through status options"""
+        """Cycle through agent_status options"""
         statuses = ['queued', 'running', 'blocked', 'completed', 'failed']
-        current = self.task_data['status']
+        current = self.task_data['agent_status']
         current_idx = statuses.index(current) if current in statuses else 0
         next_status = statuses[(current_idx + 1) % len(statuses)]
 
-        self._update_field('status', next_status)
+        self._update_field('agent_status', next_status)
 
     def action_cycle_priority(self) -> None:
         """Cycle through priority options"""
@@ -1841,7 +1841,7 @@ class AgentCard(Static):
 
         selector = "▶ " if self.selected else "  "
 
-        yield Static(f"{selector}[bold]{agent['task_id']}[/bold] | {health_display} | {agent.get('task_status', '-')}", classes="agent-card-header")
+        yield Static(f"{selector}[bold]{agent['task_id']}[/bold] | {health_display} | {agent.get('task_agent_status', '-')}", classes="agent-card-header")
         yield Static(output_text, classes="agent-card-output")
 
 
