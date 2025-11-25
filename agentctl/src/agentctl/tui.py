@@ -10,7 +10,7 @@ from typing import List, Dict, Optional, Tuple
 from pathlib import Path
 
 from agentctl.core import database, task_sync, task_md
-from agentctl.core.task import create_markdown_task, update_markdown_task, delete_markdown_task
+from agentctl.core.task import create_markdown_task, update_markdown_task, delete_markdown_task, copy_task_file_to_workdir
 from agentctl.core.agent_monitor import get_agent_status, get_all_agent_statuses, get_health_display, HEALTH_ICONS
 
 
@@ -1400,6 +1400,7 @@ class TaskDetailScreen(Screen):
         ("s", "start_task", "Start Task"),
         ("e", "edit_in_nvim", "Edit in nvim"),
         ("a", "attach_tmux", "Attach tmux"),
+        ("f", "refresh_task_file", "Refresh TASK.md"),
         ("1", "cycle_status", "Cycle Status"),
         ("2", "cycle_priority", "Cycle Priority"),
         ("3", "cycle_category", "Cycle Category"),
@@ -1594,6 +1595,29 @@ class TaskDetailScreen(Screen):
                 self.load_task_details()
 
         self.app.push_screen(StartTaskModal(self.task_id), check_result)
+
+    def action_refresh_task_file(self) -> None:
+        """Re-copy source task file to TASK.md in working directory"""
+        # Determine working directory
+        if self.task_data.get('worktree_path'):
+            work_dir = Path(self.task_data['worktree_path'])
+        elif self.task_data.get('repository_path'):
+            work_dir = Path(self.task_data['repository_path'])
+        else:
+            self.app.notify("No working directory found for task", severity="error")
+            return
+
+        if not work_dir.exists():
+            self.app.notify(f"Working directory does not exist: {work_dir}", severity="error")
+            return
+
+        # Copy the task file
+        result = copy_task_file_to_workdir(self.task_id, work_dir)
+
+        if result:
+            self.app.notify(f"Refreshed TASK.md in {work_dir}", severity="success")
+        else:
+            self.app.notify("Failed to copy task file", severity="error")
 
     def action_complete_task(self) -> None:
         """Mark task as completed"""
