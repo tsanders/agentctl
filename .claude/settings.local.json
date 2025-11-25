@@ -1,16 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Skill(superpowers:brainstorming)",
+      "Bash(python3:*)",
       "Bash(source .venv/bin/activate)",
-      "Bash(agentctl --help:*)",
-      "Bash(source agentctl/.venv/bin/activate)",
-      "Bash(python -m agentctl.cli:*)",
-      "Bash(tmux ls:*)",
-      "Bash(/usr/local/bin/tmux ls:*)",
-      "Bash(python -c:*)",
-      "Bash(python -m py_compile:*)",
-      "Bash(python3 -m py_compile:*)"
+      "Bash(python:*)",
+      "Skill(superpowers:brainstorming)"
     ],
     "deny": [],
     "ask": []
