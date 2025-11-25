@@ -697,10 +697,16 @@ class StartTaskModal(ModalScreen):
 
         # Check if task has a repository
         if not self.task_data.get('repository_id'):
+            tmux_session_name = f"agent-{self.task_id}"
             yield Container(
                 Label(f"Start Task: {self.task_id}", id="modal-title"),
                 Static("❌ No repository associated with this task", classes="detail-row"),
                 Static("Cannot create worktree without a repository.", classes="detail-row"),
+                Static("", classes="detail-row"),  # Spacer
+                Static("🖥️  tmux Session", classes="widget-title"),
+                Static(f"Session: {tmux_session_name}", classes="detail-row"),
+                Static(f"Attach: tmux attach -t {tmux_session_name}", classes="detail-row"),
+                Static("A tmux session will be created in the current directory", classes="detail-row"),
                 Container(
                     Button("Start Anyway", id="start-btn", variant="success"),
                     Button("Cancel", id="cancel-btn", variant="error"),
@@ -718,6 +724,8 @@ class StartTaskModal(ModalScreen):
         worktree_path = get_worktree_path(repo_path, self.task_id)
         branch_name = get_branch_name(self.task_data['category'], self.task_id)
 
+        tmux_session_name = f"agent-{self.task_id}"
+
         yield Container(
             Label(f"Start Task: {self.task_id}", id="modal-title"),
             Static(f"Title: {self.task_data['title']}", classes="detail-row"),
@@ -726,6 +734,10 @@ class StartTaskModal(ModalScreen):
             Static("🌿 Git Worktree Configuration", classes="widget-title"),
             Static(f"Branch: {branch_name}", classes="detail-row"),
             Static(f"Worktree Path: {worktree_path}", classes="detail-row"),
+            Static("", classes="detail-row"),  # Spacer
+            Static("🖥️  tmux Session", classes="widget-title"),
+            Static(f"Session: {tmux_session_name}", classes="detail-row"),
+            Static(f"Attach: tmux attach -t {tmux_session_name}", classes="detail-row"),
             Static("", classes="detail-row"),  # Spacer
             Select(
                 options=[
@@ -736,6 +748,7 @@ class StartTaskModal(ModalScreen):
                 id="worktree-option",
                 value=True
             ),
+            Static("Note: A tmux session will be created in either case", classes="detail-row"),
             Container(
                 Button("Start", id="start-btn", variant="success"),
                 Button("Cancel", id="cancel-btn", variant="error"),
@@ -764,6 +777,8 @@ class StartTaskModal(ModalScreen):
                     pass
 
             try:
+                from agentctl.core.tmux import create_session
+
                 # Check if this is a markdown task
                 task_source = self.task_data.get('source', 'database')
                 if task_source == 'markdown':
@@ -782,6 +797,10 @@ class StartTaskModal(ModalScreen):
                         started_at=int(datetime.now().timestamp())
                     )
 
+                # Determine working directory and session name
+                tmux_session_name = f"agent-{self.task_id}"
+                working_dir = None
+
                 # Create worktree if requested
                 if create_worktree and self.task_data.get('repository_path'):
                     from agentctl.core.worktree import create_worktree, get_worktree_path, get_branch_name
@@ -796,6 +815,9 @@ class StartTaskModal(ModalScreen):
                         base_branch
                     )
 
+                    # Use worktree path as working directory
+                    working_dir = Path(worktree_info['worktree_path'])
+
                     # Update task with worktree and branch info
                     if task_source == 'markdown':
                         update_markdown_task(self.task_id, {
@@ -808,14 +830,36 @@ class StartTaskModal(ModalScreen):
                             git_branch=worktree_info['branch_name'],
                             worktree_path=worktree_info['worktree_path']
                         )
-
-                    self.app.notify(
-                        f"Task started with worktree at {worktree_info['worktree_path']}",
-                        severity="success",
-                        timeout=5
-                    )
                 else:
-                    self.app.notify(f"Task {self.task_id} started", severity="success")
+                    # Use repository path or current directory
+                    if self.task_data.get('repository_path'):
+                        working_dir = Path(self.task_data['repository_path'])
+                    else:
+                        working_dir = Path.cwd()
+
+                # Create tmux session
+                try:
+                    tmux_session = create_session(tmux_session_name, working_dir)
+
+                    # Update task with tmux session info
+                    if task_source == 'markdown':
+                        update_markdown_task(self.task_id, {'tmux_session': tmux_session})
+                    else:
+                        database.update_task(self.task_id, tmux_session=tmux_session)
+
+                    success_msg = f"Task started"
+                    if create_worktree:
+                        success_msg += f" with worktree at {working_dir}"
+                    success_msg += f"\nTmux session: {tmux_session}\nAttach: tmux attach -t {tmux_session}"
+
+                    self.app.notify(success_msg, severity="success", timeout=8)
+                except Exception as tmux_error:
+                    self.app.notify(f"Warning: Failed to create tmux session: {tmux_error}", severity="warning")
+                    # Continue even if tmux fails
+                    success_msg = f"Task started"
+                    if create_worktree:
+                        success_msg += f" with worktree at {working_dir}"
+                    self.app.notify(success_msg, severity="success", timeout=5)
 
                 database.add_event(self.task_id, "started")
                 self.dismiss(self.task_id)
@@ -1330,10 +1374,12 @@ class TaskDetailScreen(Screen):
 
     BINDINGS = [
         ("escape", "go_back", "Back"),
+        ("s", "start_task", "Start Task"),
         ("e", "edit_in_nvim", "Edit in nvim"),
         ("1", "cycle_status", "Cycle Status"),
         ("2", "cycle_priority", "Cycle Priority"),
         ("3", "cycle_category", "Cycle Category"),
+        ("c", "complete_task", "Complete"),
         ("d", "delete_task", "Delete"),
         ("q", "quit", "Quit"),
     ]
