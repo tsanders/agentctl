@@ -11,6 +11,7 @@ from pathlib import Path
 
 from agentctl.core import database, task_sync, task_md
 from agentctl.core.task import create_markdown_task, update_markdown_task, delete_markdown_task
+from agentctl.core.agent_monitor import get_agent_status, get_all_agent_statuses, get_health_display, HEALTH_ICONS
 
 
 class AgentStatusWidget(Static):
@@ -1016,6 +1017,8 @@ class TaskManagementScreen(Screen):
         # Sync markdown tasks before loading
         self._sync_markdown_tasks()
         self.load_tasks()
+        # Auto-refresh every 5 seconds for agent status updates
+        self.set_interval(5, self.load_tasks)
 
     def _sync_markdown_tasks(self) -> None:
         """Sync all markdown tasks from projects"""
@@ -1033,9 +1036,11 @@ class TaskManagementScreen(Screen):
 
         table = self.query_one("#tasks-table", DataTable)
         table.clear()
-        # Compact columns: S=Status, P=Priority, T=Tmux
-        table.add_columns("ID", "Title", "S", "P", "T")
-        table.cursor_type = "row"
+        # Only add columns on first load
+        if len(table.columns) == 0:
+            # Compact columns: S=Status, P=Priority, A=Agent health
+            table.add_columns("ID", "Title", "S", "P", "A")
+            table.cursor_type = "row"
 
         for task in tasks:
             status_icon = {
@@ -1052,15 +1057,20 @@ class TaskManagementScreen(Screen):
                 "low": "🟢"
             }.get(task.get('priority', 'medium'), "⚪")
 
-            # Tmux: ✓ if running, - if not
-            tmux_indicator = "✓" if task.get('tmux_session') else "-"
+            # Agent health indicator
+            tmux_session = task.get('tmux_session')
+            if tmux_session:
+                agent_status = get_agent_status(task['task_id'], tmux_session)
+                agent_icon = agent_status.get('icon', '-')
+            else:
+                agent_icon = "-"
 
             table.add_row(
                 task['task_id'],
                 task.get('title', '-')[:40],
                 status_icon,
                 priority_icon,
-                tmux_indicator
+                agent_icon
             )
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
@@ -1389,6 +1399,7 @@ class TaskDetailScreen(Screen):
         ("escape", "go_back", "Back"),
         ("s", "start_task", "Start Task"),
         ("e", "edit_in_nvim", "Edit in nvim"),
+        ("a", "attach_tmux", "Attach tmux"),
         ("1", "cycle_status", "Cycle Status"),
         ("2", "cycle_priority", "Cycle Priority"),
         ("3", "cycle_category", "Cycle Category"),
@@ -1414,6 +1425,24 @@ class TaskDetailScreen(Screen):
         container = self.query_one("#task-detail-container", Container)
         container.scroll_up()
 
+    def action_attach_tmux(self) -> None:
+        """Attach to task's tmux session"""
+        import subprocess
+        from agentctl.core.tmux import session_exists
+
+        tmux_session = self.task_data.get('tmux_session') if self.task_data else None
+        if not tmux_session:
+            self.app.notify("No tmux session for this task", severity="warning")
+            return
+
+        if not session_exists(tmux_session):
+            self.app.notify(f"Session '{tmux_session}' not found", severity="error")
+            return
+
+        # Suspend TUI and attach to tmux
+        with self.app.suspend():
+            subprocess.run(["tmux", "attach", "-t", tmux_session])
+
     def compose(self) -> ComposeResult:
         yield Header()
         yield Container(
@@ -1424,6 +1453,8 @@ class TaskDetailScreen(Screen):
 
     def on_mount(self) -> None:
         self.load_task_details()
+        # Auto-refresh every 2 seconds for agent status updates
+        self.set_interval(2, self.load_task_details)
 
     def load_task_details(self) -> None:
         """Load and display comprehensive task information"""
@@ -1443,6 +1474,18 @@ class TaskDetailScreen(Screen):
         desc = self.task_data.get('description') or '-'
         desc_short = desc[:50] + '...' if len(desc) > 50 else desc
 
+        # Get agent health status if tmux session exists
+        agent_status_line = "Agent: No tmux session"
+        tmux_session = self.task_data.get('tmux_session')
+        if tmux_session:
+            agent_info = get_agent_status(self.task_id, tmux_session)
+            health_display = get_health_display(agent_info['health'])
+            agent_status_line = f"Agent: {health_display}"
+            if agent_info.get('warnings'):
+                agent_status_line += f" - {', '.join(agent_info['warnings'])}"
+            if agent_info.get('last_output_preview'):
+                agent_status_line += f"\nOutput: {agent_info['last_output_preview']}"
+
         container.mount(
             Static(f"📋 {self.task_id}", classes="screen-title"),
             # Compact single-section layout
@@ -1452,11 +1495,12 @@ class TaskDetailScreen(Screen):
             Static(f"[1] Status: {self._format_status(self.task_data['status'])}", classes="detail-row"),
             Static(f"[2] Priority: {self.task_data['priority'].upper()} | [3] Category: {self.task_data['category']}", classes="detail-row"),
             Static(f"Type: {self.task_data['type']} | Phase: {self.task_data.get('phase') or '-'}", classes="detail-row"),
-            Static(f"Agent: {self.task_data.get('agent_type') or '-'} | Commits: {self.task_data.get('commits', 0)}", classes="detail-row"),
+            Static(agent_status_line, classes="detail-row"),
+            Static(f"Commits: {self.task_data.get('commits', 0)}", classes="detail-row"),
             Static(f"Created: {self._format_timestamp(self.task_data.get('created_at'))} | Started: {self._format_timestamp(self.task_data.get('started_at'))}", classes="detail-row"),
             Static(f"Branch: {self.task_data.get('git_branch') or '-'}", classes="detail-row"),
             Static(f"Worktree: {self.task_data.get('worktree_path') or '-'}", classes="detail-row"),
-            Static(f"tmux: {self.task_data.get('tmux_session') or '-'}", classes="detail-row"),
+            Static(f"tmux: {tmux_session or '-'}", classes="detail-row"),
         )
 
     def _format_status(self, status: str) -> str:
@@ -1734,6 +1778,154 @@ class ProjectListScreen(Screen):
             self.app.push_screen(ProjectDetailScreen(project_id))
 
 
+class AgentCard(Static):
+    """A card widget displaying a single agent's status and output"""
+
+    def __init__(self, agent_data: Dict, selected: bool = False):
+        super().__init__()
+        self.agent_data = agent_data
+        self.selected = selected
+
+    def compose(self) -> ComposeResult:
+        agent = self.agent_data
+        health_display = get_health_display(agent["health"])
+
+        # Get multiple lines of recent output
+        recent_lines = agent.get("recent_output", [])
+        # Filter to non-empty lines and get last 5
+        non_empty = [line for line in recent_lines if line.strip()][-5:]
+        output_text = "\n".join(non_empty) if non_empty else "(no output)"
+
+        # Truncate each line if too long
+        output_lines = []
+        for line in output_text.split("\n"):
+            if len(line) > 70:
+                line = line[:67] + "..."
+            output_lines.append(line)
+        output_text = "\n".join(output_lines)
+
+        selector = "▶ " if self.selected else "  "
+
+        yield Static(f"{selector}[bold]{agent['task_id']}[/bold] | {health_display} | {agent.get('task_status', '-')}", classes="agent-card-header")
+        yield Static(output_text, classes="agent-card-output")
+
+
+class AgentsMonitorScreen(Screen):
+    """Dedicated screen for monitoring all agents"""
+
+    BINDINGS = [
+        ("escape", "go_back", "Back"),
+        ("enter", "view_task", "View Task"),
+        ("a", "attach_tmux", "Attach tmux"),
+        ("r", "refresh", "Refresh"),
+        ("j", "cursor_down", "Down"),
+        ("k", "cursor_up", "Up"),
+        ("q", "quit", "Quit"),
+    ]
+
+    def __init__(self):
+        super().__init__()
+        self.selected_index = 0
+        self.agents_data: List[Dict] = []
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield ScrollableContainer(
+            Static("🤖 ACTIVE AGENTS", classes="screen-title"),
+            Container(id="agents-cards-container"),
+            id="agents-monitor-scroll"
+        )
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.load_agents()
+        # Auto-refresh every 2 seconds
+        self.set_interval(2, self.load_agents)
+
+    def load_agents(self) -> None:
+        """Load and display all agent statuses as cards"""
+        self.agents_data = get_all_agent_statuses()
+
+        container = self.query_one("#agents-cards-container", Container)
+        container.remove_children()
+
+        if not self.agents_data:
+            container.mount(Static("[dim]No agents with tmux sessions found[/dim]"))
+            return
+
+        # Clamp selected index
+        if self.selected_index >= len(self.agents_data):
+            self.selected_index = len(self.agents_data) - 1
+        if self.selected_index < 0:
+            self.selected_index = 0
+
+        for i, agent in enumerate(self.agents_data):
+            is_selected = (i == self.selected_index)
+            card = AgentCard(agent, selected=is_selected)
+            card.add_class("agent-card")
+            if is_selected:
+                card.add_class("agent-card-selected")
+            container.mount(card)
+
+    def action_go_back(self) -> None:
+        """Go back to main dashboard"""
+        self.app.pop_screen()
+
+    def action_cursor_down(self) -> None:
+        """Move cursor down (vim j)"""
+        if self.agents_data and self.selected_index < len(self.agents_data) - 1:
+            self.selected_index += 1
+            self.load_agents()
+
+    def action_cursor_up(self) -> None:
+        """Move cursor up (vim k)"""
+        if self.agents_data and self.selected_index > 0:
+            self.selected_index -= 1
+            self.load_agents()
+
+    def action_refresh(self) -> None:
+        """Manually refresh agent list"""
+        self.load_agents()
+        self.app.notify("Agents refreshed", severity="information")
+
+    def action_view_task(self) -> None:
+        """Open task detail for selected agent"""
+        if not self.agents_data:
+            return
+        task_id = self.agents_data[self.selected_index]["task_id"]
+        self.app.push_screen(TaskDetailScreen(task_id))
+
+    def action_attach_tmux(self) -> None:
+        """Attach to selected agent's tmux session"""
+        import subprocess
+        from agentctl.core.tmux import session_exists
+
+        if not self.agents_data:
+            self.app.notify("No agent selected", severity="warning")
+            return
+
+        task_id = self.agents_data[self.selected_index]["task_id"]
+
+        # Get task to find tmux session
+        task = database.get_task(task_id)
+        if not task:
+            self.app.notify(f"Task {task_id} not found", severity="error")
+            return
+
+        tmux_session = task.get("tmux_session")
+        if not tmux_session:
+            self.app.notify("Task has no tmux session", severity="warning")
+            return
+
+        if not session_exists(tmux_session):
+            self.app.notify(f"Session '{tmux_session}' not found", severity="error")
+            return
+
+        # Suspend TUI and attach to tmux
+        with self.app.suspend():
+            subprocess.run(["tmux", "attach", "-t", tmux_session])
+
+
 class AgentDashboard(App):
     """Main TUI dashboard application for agentctl"""
 
@@ -1869,6 +2061,40 @@ class AgentDashboard(App):
         padding: 0;
         margin: 0;
     }
+
+    /* Agent cards for monitoring screen */
+    #agents-monitor-scroll {
+        height: 100%;
+        overflow-y: auto;
+    }
+
+    #agents-cards-container {
+        height: auto;
+        padding: 0 1;
+    }
+
+    .agent-card {
+        border: solid $accent;
+        margin: 1 0;
+        padding: 0 1;
+        height: auto;
+    }
+
+    .agent-card-selected {
+        border: solid $success;
+        background: $boost;
+    }
+
+    .agent-card-header {
+        text-style: bold;
+        padding: 0;
+    }
+
+    .agent-card-output {
+        color: $text-muted;
+        padding: 0;
+        margin-left: 2;
+    }
     """
 
     BINDINGS = [
@@ -1877,6 +2103,7 @@ class AgentDashboard(App):
         ("s", "status", "Status"),
         ("p", "manage_projects", "Projects"),
         ("t", "manage_tasks", "Tasks"),
+        ("a", "monitor_agents", "Agents"),
     ]
 
     def compose(self) -> ComposeResult:
@@ -1912,6 +2139,10 @@ class AgentDashboard(App):
     def action_manage_tasks(self) -> None:
         """Open tasks management screen"""
         self.push_screen(TaskManagementScreen())
+
+    def action_monitor_agents(self) -> None:
+        """Open agents monitor screen"""
+        self.push_screen(AgentsMonitorScreen())
 
 
 def run_dashboard():

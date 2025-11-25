@@ -9,6 +9,12 @@ from enum import Enum
 
 from agentctl.core import database
 from agentctl.core.task import start_task
+from agentctl.core.agent_monitor import (
+    get_all_agent_statuses,
+    get_agent_status,
+    get_health_display,
+    HEALTH_ICONS,
+)
 
 app = typer.Typer(
     name="agentctl",
@@ -94,6 +100,129 @@ def status():
     if blocked:
         console.print(f"\n💡 [bold yellow]Next action:[/bold yellow] Review {blocked[0]['task_id']}")
         console.print(f"   Run: [cyan]agentctl review next[/cyan]\n")
+
+
+@app.command()
+def agents(
+    watch: bool = typer.Option(False, "--watch", "-w", help="Live updating view (refresh every 2s)"),
+):
+    """Show status of all Claude agents in tmux sessions"""
+    import time as time_module
+
+    def show_agents():
+        agent_statuses = get_all_agent_statuses()
+
+        if not agent_statuses:
+            console.print("\n🤖 [bold cyan]ACTIVE AGENTS[/bold cyan] (0)")
+            console.print("[dim]No agents with tmux sessions found[/dim]")
+            console.print("\nStart a task with: [cyan]agentctl task start <task-id>[/cyan]")
+            return False  # No agents needing attention
+
+        # Check if any need attention
+        needs_attention = any(
+            s["health"] in ("error", "waiting")
+            for s in agent_statuses
+        )
+
+        console.print(f"\n🤖 [bold cyan]ACTIVE AGENTS[/bold cyan] ({len(agent_statuses)})")
+        console.print()
+
+        table = Table(show_header=True, header_style="bold magenta", box=box.ROUNDED)
+        table.add_column("Task", style="cyan", max_width=25)
+        table.add_column("Health", style="white", width=12)
+        table.add_column("Status", style="white", width=10)
+        table.add_column("Recent Output", style="dim", max_width=45)
+
+        for agent in agent_statuses:
+            # Format health display
+            health_display = get_health_display(agent["health"])
+
+            # Truncate output preview
+            output = agent.get("last_output_preview", "") or "-"
+            if len(output) > 42:
+                output = output[:39] + "..."
+
+            # Color code health
+            health_color = {
+                "active": "green",
+                "idle": "yellow",
+                "waiting": "rgb(255,165,0)",  # orange
+                "exited": "red",
+                "error": "red",
+            }.get(agent["health"], "white")
+
+            table.add_row(
+                agent["task_id"],
+                f"[{health_color}]{health_display}[/{health_color}]",
+                agent.get("task_status", "-"),
+                output,
+            )
+
+        console.print(table)
+
+        # Show warnings if any
+        warnings = [
+            (a["task_id"], a["warnings"])
+            for a in agent_statuses
+            if a.get("warnings")
+        ]
+        if warnings:
+            console.print("\n[yellow]Warnings:[/yellow]")
+            for task_id, warns in warnings:
+                for w in warns:
+                    console.print(f"  • {task_id}: {w}")
+
+        console.print("\nAttach: [cyan]agentctl attach <task-id>[/cyan]")
+
+        return needs_attention
+
+    if watch:
+        try:
+            while True:
+                console.clear()
+                show_agents()
+                console.print("\n[dim]Press Ctrl+C to exit[/dim]")
+                time_module.sleep(2)
+        except KeyboardInterrupt:
+            console.print("\n[dim]Stopped watching[/dim]")
+    else:
+        needs_attention = show_agents()
+        # Exit code 1 if any agent needs attention
+        if needs_attention:
+            raise typer.Exit(1)
+
+
+@app.command()
+def attach(
+    task_id: str = typer.Argument(..., help="Task ID to attach to"),
+):
+    """Attach to a task's tmux session"""
+    import subprocess
+
+    # Get task to find tmux session
+    task = database.get_task(task_id)
+    if not task:
+        console.print(f"[red]Error:[/red] Task '{task_id}' not found")
+        raise typer.Exit(1)
+
+    tmux_session = task.get("tmux_session")
+    if not tmux_session:
+        console.print(f"[red]Error:[/red] Task '{task_id}' has no tmux session")
+        console.print("Start the task first with: [cyan]agentctl task start {task_id}[/cyan]")
+        raise typer.Exit(1)
+
+    # Check if session exists
+    from agentctl.core.tmux import session_exists
+    if not session_exists(tmux_session):
+        console.print(f"[red]Error:[/red] tmux session '{tmux_session}' not found")
+        console.print("The session may have been closed.")
+        raise typer.Exit(1)
+
+    console.print(f"Attaching to [cyan]{tmux_session}[/cyan]...")
+    console.print("[dim]Press Ctrl+B, D to detach[/dim]\n")
+
+    # Execute tmux attach
+    subprocess.run(["tmux", "attach", "-t", tmux_session])
 
 
 # Task management commands
