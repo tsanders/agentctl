@@ -1428,6 +1428,7 @@ class TaskDetailScreen(Screen):
     def action_attach_tmux(self) -> None:
         """Attach to task's tmux session"""
         import subprocess
+        import os
         from agentctl.core.tmux import session_exists
 
         tmux_session = self.task_data.get('tmux_session') if self.task_data else None
@@ -1439,9 +1440,15 @@ class TaskDetailScreen(Screen):
             self.app.notify(f"Session '{tmux_session}' not found", severity="error")
             return
 
-        # Suspend TUI and attach to tmux
-        with self.app.suspend():
-            subprocess.run(["tmux", "attach", "-t", tmux_session])
+        # Check if we're inside tmux already
+        if os.environ.get('TMUX'):
+            # Use switch-client to switch to the target session
+            with self.app.suspend():
+                subprocess.run(["tmux", "switch-client", "-t", tmux_session])
+        else:
+            # Not in tmux, use regular attach
+            with self.app.suspend():
+                subprocess.run(["tmux", "attach", "-t", tmux_session])
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -1898,6 +1905,7 @@ class AgentsMonitorScreen(Screen):
     def action_attach_tmux(self) -> None:
         """Attach to selected agent's tmux session"""
         import subprocess
+        import os
         from agentctl.core.tmux import session_exists
 
         if not self.agents_data:
@@ -1921,9 +1929,15 @@ class AgentsMonitorScreen(Screen):
             self.app.notify(f"Session '{tmux_session}' not found", severity="error")
             return
 
-        # Suspend TUI and attach to tmux
-        with self.app.suspend():
-            subprocess.run(["tmux", "attach", "-t", tmux_session])
+        # Check if we're inside tmux already
+        if os.environ.get('TMUX'):
+            # Use switch-client to switch to the target session
+            with self.app.suspend():
+                subprocess.run(["tmux", "switch-client", "-t", tmux_session])
+        else:
+            # Not in tmux, use regular attach
+            with self.app.suspend():
+                subprocess.run(["tmux", "attach", "-t", tmux_session])
 
 
 class AgentDashboard(App):
