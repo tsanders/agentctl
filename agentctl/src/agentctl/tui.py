@@ -836,6 +836,9 @@ class StartTaskModal(ModalScreen):
                     else:
                         database.update_task(self.task_id, tmux_session=tmux_session)
 
+                    # Copy task file to working directory
+                    copy_task_file_to_workdir(self.task_id, working_dir)
+
                     success_msg = f"Task started"
                     if create_worktree:
                         success_msg += f" with worktree at {working_dir}"
@@ -844,7 +847,8 @@ class StartTaskModal(ModalScreen):
                     self.app.notify(success_msg, severity="success", timeout=8)
                 except Exception as tmux_error:
                     self.app.notify(f"Warning: Failed to create tmux session: {tmux_error}", severity="warning")
-                    # Continue even if tmux fails
+                    # Continue even if tmux fails - still copy task file
+                    copy_task_file_to_workdir(self.task_id, working_dir)
                     success_msg = f"Task started"
                     if create_worktree:
                         success_msg += f" with worktree at {working_dir}"
