@@ -735,7 +735,7 @@ class StartTaskModal(ModalScreen):
         from agentctl.core.worktree import get_worktree_path, get_branch_name
 
         # Calculate worktree path and branch name
-        repo_path = Path(self.task_data['repository_path'])
+        repo_path = Path(self.task_data['repository_path']).expanduser()
         worktree_path = get_worktree_path(repo_path, self.task_id)
         branch_name = get_branch_name(self.task_data['category'], self.task_id)
 
@@ -803,7 +803,7 @@ class StartTaskModal(ModalScreen):
                 if create_worktree and self.task_data.get('repository_path'):
                     from agentctl.core.worktree import create_worktree, get_worktree_path, get_branch_name
 
-                    repo_path = Path(self.task_data['repository_path'])
+                    repo_path = Path(self.task_data['repository_path']).expanduser()
                     base_branch = self.task_data.get('repository_default_branch', 'main')
 
                     worktree_info = create_worktree(
@@ -824,7 +824,7 @@ class StartTaskModal(ModalScreen):
                 else:
                     # Use repository path or current directory
                     if self.task_data.get('repository_path'):
-                        working_dir = Path(self.task_data['repository_path'])
+                        working_dir = Path(self.task_data['repository_path']).expanduser()
                     else:
                         working_dir = Path.cwd()
 
@@ -1610,9 +1610,9 @@ class TaskDetailScreen(Screen):
         """Re-copy source task file to TASK.md in working directory"""
         # Determine working directory
         if self.task_data.get('worktree_path'):
-            work_dir = Path(self.task_data['worktree_path'])
+            work_dir = Path(self.task_data['worktree_path']).expanduser()
         elif self.task_data.get('repository_path'):
-            work_dir = Path(self.task_data['repository_path'])
+            work_dir = Path(self.task_data['repository_path']).expanduser()
         else:
             self.app.notify("No working directory found for task", severity="error")
             return

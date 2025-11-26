@@ -524,13 +524,13 @@ def task_refresh(
 
     # Determine working directory
     if task.get('worktree_path'):
-        work_dir = Path(task['worktree_path'])
+        work_dir = Path(task['worktree_path']).expanduser()
     elif task.get('repository_path'):
-        work_dir = Path(task['repository_path'])
+        work_dir = Path(task['repository_path']).expanduser()
     elif task.get('repository_id'):
         repo = database.get_repository(task['repository_id'])
         if repo:
-            work_dir = Path(repo['path'])
+            work_dir = Path(repo['path']).expanduser()
         else:
             console.print(f"[red]Error:[/red] Repository not found for task")
             raise typer.Exit(1)
