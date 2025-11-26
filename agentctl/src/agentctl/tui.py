@@ -1556,22 +1556,28 @@ class TaskDetailScreen(Screen):
             if agent_info.get('last_output_preview'):
                 agent_status_line += f"\nOutput: {agent_info['last_output_preview']}"
 
+        # Get markdown body content
+        markdown_body = self.task_data.get('_markdown_body', '')
+        if markdown_body:
+            # Clean up and format for display
+            markdown_body = markdown_body.strip()
+        else:
+            markdown_body = "(no content)"
+
         container.mount(
             Static(f"📋 {self.task_id}", classes="screen-title"),
             # Compact single-section layout
             Static(f"Title: {self.task_data['title']}", classes="detail-row"),
-            Static(f"Desc: {desc_short}", classes="detail-row"),
             Static(f"Project: {self.task_data.get('project_name', '-')} | Repo: {self.task_data.get('repository_name') or '-'}", classes="detail-row"),
             Static(f"[1] Status: {self._format_status(self.task_data['agent_status'])}", classes="detail-row"),
             Static(f"[2] Priority: {self.task_data['priority'].upper()} | [3] Category: {self.task_data['category']}", classes="detail-row"),
             Static(f"Type: {self.task_data['type']} | Phase: {self.task_data.get('phase') or '-'}", classes="detail-row"),
             Static(agent_status_line, classes="detail-row"),
-            Static(f"Commits: {self.task_data.get('commits', 0)}", classes="detail-row"),
-            Static(f"Created: {self._format_timestamp(self.task_data.get('created_at'))} | Started: {self._format_timestamp(self.task_data.get('started_at'))}", classes="detail-row"),
-            Static(f"Branch: {self.task_data.get('git_branch') or '-'}", classes="detail-row"),
-            Static(f"Worktree: {self.task_data.get('worktree_path') or '-'}", classes="detail-row"),
-            Static(f"tmux: {tmux_session or '-'}", classes="detail-row"),
+            Static(f"Branch: {self.task_data.get('git_branch') or '-'} | tmux: {tmux_session or '-'}", classes="detail-row"),
             Static(f"[n] Notes: {self.task_data.get('notes') or '(none - press n to add)'}", classes="detail-row"),
+            Static("─" * 60, classes="detail-row"),
+            Static("[bold]Task Content:[/bold]", classes="detail-row"),
+            Static(markdown_body, classes="task-markdown-content"),
         )
 
     def _format_status(self, status: str) -> str:
