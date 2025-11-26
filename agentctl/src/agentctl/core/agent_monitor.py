@@ -328,6 +328,7 @@ def get_all_agent_statuses() -> List[Dict]:
         status["task_agent_status"] = task.get("agent_status", "")
         status["project"] = task.get("project_name", task.get("project", ""))
         status["elapsed"] = task.get("elapsed", "-")
+        status["notes"] = task.get("notes", "")
         agents.append(status)
 
     # Sort by health priority: error > waiting > idle > active > exited
@@ -366,3 +367,127 @@ def get_health_display(health: str, include_label: bool = True) -> str:
     if include_label:
         return f"{icon} {health.upper()}"
     return icon
+
+
+# State tracking for notifications
+_previous_agent_states: Dict[str, str] = {}
+
+
+def send_desktop_notification(title: str, message: str, sound: bool = True) -> bool:
+    """Send a desktop notification using osascript on macOS.
+
+    Args:
+        title: Notification title
+        message: Notification body
+        sound: Whether to play a sound
+
+    Returns:
+        True if notification was sent successfully
+    """
+    import subprocess
+    import platform
+
+    if platform.system() != "Darwin":
+        # TODO: Add Linux notification support (notify-send)
+        return False
+
+    try:
+        sound_param = 'with sound name "Funk"' if sound else ""
+        script = f'display notification "{message}" with title "{title}" {sound_param}'
+        subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            timeout=5
+        )
+        return True
+    except Exception:
+        return False
+
+
+def check_and_notify_state_changes(agents: List[Dict]) -> List[Dict]:
+    """Check for agent state changes and send notifications.
+
+    Args:
+        agents: List of agent status dicts from get_all_agent_statuses()
+
+    Returns:
+        List of state changes that triggered notifications
+    """
+    global _previous_agent_states
+
+    notifications = []
+
+    for agent in agents:
+        task_id = agent["task_id"]
+        current_health = agent["health"]
+        previous_health = _previous_agent_states.get(task_id)
+
+        # Skip if no previous state (first check)
+        if previous_health is None:
+            _previous_agent_states[task_id] = current_health
+            continue
+
+        # Check for state changes that need notification
+        if previous_health != current_health:
+            notification = None
+
+            if current_health == HEALTH_WAITING:
+                notification = {
+                    "task_id": task_id,
+                    "title": f"🟠 Agent Waiting: {task_id}",
+                    "message": "Agent is waiting for input",
+                    "health": current_health,
+                    "previous": previous_health,
+                }
+            elif current_health == HEALTH_ERROR:
+                notification = {
+                    "task_id": task_id,
+                    "title": f"⚠️ Agent Error: {task_id}",
+                    "message": "Agent encountered an error",
+                    "health": current_health,
+                    "previous": previous_health,
+                }
+            elif current_health == HEALTH_EXITED:
+                notification = {
+                    "task_id": task_id,
+                    "title": f"🔴 Agent Exited: {task_id}",
+                    "message": "Agent session has exited",
+                    "health": current_health,
+                    "previous": previous_health,
+                }
+            elif current_health == HEALTH_ACTIVE and previous_health in (HEALTH_IDLE, HEALTH_WAITING):
+                # Agent resumed working - lower priority notification
+                notification = {
+                    "task_id": task_id,
+                    "title": f"🟢 Agent Active: {task_id}",
+                    "message": "Agent resumed working",
+                    "health": current_health,
+                    "previous": previous_health,
+                    "sound": False,  # No sound for resume
+                }
+
+            if notification:
+                sound = notification.pop("sound", True)
+                send_desktop_notification(
+                    notification["title"],
+                    notification["message"],
+                    sound=sound
+                )
+                notifications.append(notification)
+
+            # Update state
+            _previous_agent_states[task_id] = current_health
+
+    # Clean up old entries for agents that no longer exist
+    current_task_ids = {a["task_id"] for a in agents}
+    for task_id in list(_previous_agent_states.keys()):
+        if task_id not in current_task_ids:
+            del _previous_agent_states[task_id]
+
+    return notifications
+
+
+def reset_notification_state():
+    """Reset the notification state tracking. Useful for testing."""
+    global _previous_agent_states
+    _previous_agent_states = {}

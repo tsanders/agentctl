@@ -12,7 +12,10 @@ from pathlib import Path
 from agentctl.core import database, task_md
 from agentctl.core import task_store
 from agentctl.core.task import create_task, update_task, delete_task, copy_task_file_to_workdir
-from agentctl.core.agent_monitor import get_agent_status, get_all_agent_statuses, get_health_display, HEALTH_ICONS
+from agentctl.core.agent_monitor import (
+    get_agent_status, get_all_agent_statuses, get_health_display, HEALTH_ICONS,
+    check_and_notify_state_changes
+)
 
 
 class AgentStatusWidget(Static):
@@ -24,7 +27,7 @@ class AgentStatusWidget(Static):
 
     def on_mount(self) -> None:
         table = self.query_one("#agents-table", DataTable)
-        table.add_columns("Task ID", "Project", "Health", "Status", "Elapsed")
+        table.add_columns("Task ID", "Health", "Status", "Output Preview")
         table.cursor_type = "row"
         self.update_agents()
         self.set_interval(3, self.update_agents)
@@ -50,10 +53,9 @@ class AgentStatusWidget(Static):
 
                 table.add_row(
                     agent['task_id'],
-                    agent['project'],
                     "⚪ NO SESSION",
                     f"{status_icon} {agent['agent_status'].upper()}",
-                    agent['elapsed']
+                    "(no tmux session)"
                 )
             return
 
@@ -70,20 +72,20 @@ class AgentStatusWidget(Static):
                 "paused": "⏸️"
             }.get(task_status, "⚪")
 
-            # Format elapsed time
-            elapsed = agent.get('elapsed', '-')
-
-            # Truncate title
-            title = agent.get('task_title', '-')
-            if len(title) > 25:
-                title = title[:22] + "..."
+            # Get output preview - last non-empty line, truncated
+            output_preview = agent.get('last_output_preview', '')
+            if not output_preview:
+                recent = agent.get('recent_output', [])
+                non_empty = [line.strip() for line in recent if line.strip()]
+                output_preview = non_empty[-1] if non_empty else "(no output)"
+            if len(output_preview) > 50:
+                output_preview = output_preview[:47] + "..."
 
             table.add_row(
                 agent['task_id'],
-                title,
                 f"{health_icon} {health.upper()}",
                 f"{status_icon} {task_status.upper()}",
-                elapsed
+                output_preview
             )
 
 
@@ -889,6 +891,43 @@ class ConfirmDeleteModal(ModalScreen):
             self.dismiss(True)
 
 
+class EditNotesModal(ModalScreen):
+    """Modal for editing task notes"""
+
+    def __init__(self, task_id: str, current_notes: str = ""):
+        super().__init__()
+        self.task_id = task_id
+        self.current_notes = current_notes or ""
+
+    def compose(self) -> ComposeResult:
+        yield Container(
+            Label(f"📝 Notes: {self.task_id}", id="modal-title"),
+            Static("Quick notes about this task/agent:", classes="detail-row"),
+            Input(value=self.current_notes, placeholder="e.g., waiting on API fix, needs PR review", id="notes-input"),
+            Container(
+                Button("Save", id="save-btn", variant="success"),
+                Button("Clear", id="clear-btn", variant="warning"),
+                Button("Cancel", id="cancel-btn", variant="primary"),
+                classes="button-row"
+            ),
+            id="edit-notes-modal"
+        )
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "cancel-btn":
+            self.dismiss(None)
+        elif event.button.id == "clear-btn":
+            # Return empty string to clear notes
+            self.dismiss("")
+        elif event.button.id == "save-btn":
+            notes_input = self.query_one("#notes-input", Input)
+            self.dismiss(notes_input.value)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Handle Enter key in input"""
+        self.dismiss(event.value)
+
+
 class ProjectDetailScreen(Screen):
     """Screen showing project details with repositories and tasks"""
 
@@ -1423,6 +1462,7 @@ class TaskDetailScreen(Screen):
         ("e", "edit_in_nvim", "Edit in nvim"),
         ("a", "attach_tmux", "Attach tmux"),
         ("f", "refresh_task_file", "Refresh TASK.md"),
+        ("n", "edit_notes", "Edit Notes"),
         ("1", "cycle_status", "Cycle Status"),
         ("2", "cycle_priority", "Cycle Priority"),
         ("3", "cycle_category", "Cycle Category"),
@@ -1531,6 +1571,7 @@ class TaskDetailScreen(Screen):
             Static(f"Branch: {self.task_data.get('git_branch') or '-'}", classes="detail-row"),
             Static(f"Worktree: {self.task_data.get('worktree_path') or '-'}", classes="detail-row"),
             Static(f"tmux: {tmux_session or '-'}", classes="detail-row"),
+            Static(f"[n] Notes: {self.task_data.get('notes') or '(none - press n to add)'}", classes="detail-row"),
         )
 
     def _format_status(self, status: str) -> str:
@@ -1706,6 +1747,29 @@ class TaskDetailScreen(Screen):
         self.app.notify(f"{field.capitalize()} changed to: {value}", severity="success")
         self.load_task_details()
 
+    def action_edit_notes(self) -> None:
+        """Edit notes for this task"""
+        current_notes = self.task_data.get('notes', '')
+
+        def handle_notes(new_notes) -> None:
+            if new_notes is None:
+                # User cancelled
+                return
+
+            # Update notes (empty string clears them)
+            success = update_task(self.task_id, {'notes': new_notes if new_notes else None})
+            if not success:
+                self.app.notify("Failed to update notes", severity="error")
+                return
+
+            if new_notes:
+                self.app.notify("Notes updated", severity="success")
+            else:
+                self.app.notify("Notes cleared", severity="information")
+            self.load_task_details()
+
+        self.app.push_screen(EditNotesModal(self.task_id, current_notes), handle_notes)
+
 
 class ProjectListScreen(Screen):
     """Screen showing all projects"""
@@ -1828,7 +1892,13 @@ class AgentCard(Static):
 
         selector = "▶ " if self.selected else "  "
 
-        yield Static(f"{selector}[bold]{agent['task_id']}[/bold] | {health_display} | {agent.get('task_agent_status', '-')}", classes="agent-card-header")
+        # Build header with optional notes
+        header = f"{selector}[bold]{agent['task_id']}[/bold] | {health_display} | {agent.get('task_agent_status', '-')}"
+        notes = agent.get("notes", "")
+        if notes:
+            header += f" | 📝 {notes[:40]}"
+
+        yield Static(header, classes="agent-card-header")
         yield Static(output_text, classes="agent-card-output")
 
 
@@ -1868,6 +1938,9 @@ class AgentsMonitorScreen(Screen):
     def load_agents(self) -> None:
         """Load and display all agent statuses as cards"""
         self.agents_data = get_all_agent_statuses()
+
+        # Check for state changes and send desktop notifications
+        check_and_notify_state_changes(self.agents_data)
 
         container = self.query_one("#agents-cards-container", Container)
         container.remove_children()
