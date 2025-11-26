@@ -1115,6 +1115,10 @@ class TaskManagementScreen(Screen):
         tasks = task_store.list_all_tasks()
 
         table = self.query_one("#tasks-table", DataTable)
+
+        # Save current cursor position before clearing
+        current_row = table.cursor_row if table.row_count > 0 else 0
+
         table.clear()
         # Only add columns on first load
         if len(table.columns) == 0:
@@ -1180,6 +1184,11 @@ class TaskManagementScreen(Screen):
                 tmux_display,
                 notes_preview
             )
+
+        # Restore cursor position (clamped to valid range)
+        if table.row_count > 0:
+            restored_row = min(current_row, table.row_count - 1)
+            table.move_cursor(row=restored_row)
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Handle row selection - open task detail view"""
