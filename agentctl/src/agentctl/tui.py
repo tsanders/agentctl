@@ -1063,6 +1063,10 @@ class TaskManagementScreen(Screen):
         ("d", "delete_task", "Delete Task"),
         ("j", "cursor_down", "Down"),
         ("k", "cursor_up", "Up"),
+        ("h", "scroll_left", "Left"),
+        ("l", "scroll_right", "Right"),
+        ("left", "scroll_left", "Left"),
+        ("right", "scroll_right", "Right"),
         ("q", "quit", "Quit"),
     ]
 
@@ -1075,6 +1079,16 @@ class TaskManagementScreen(Screen):
         """Move cursor up (vim k)"""
         table = self.query_one("#tasks-table", DataTable)
         table.action_cursor_up()
+
+    def action_scroll_left(self) -> None:
+        """Scroll table left (vim h)"""
+        table = self.query_one("#tasks-table", DataTable)
+        table.action_scroll_left()
+
+    def action_scroll_right(self) -> None:
+        """Scroll table right (vim l)"""
+        table = self.query_one("#tasks-table", DataTable)
+        table.action_scroll_right()
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -1097,46 +1111,74 @@ class TaskManagementScreen(Screen):
         pass
 
     def load_tasks(self) -> None:
-        """Load and display all tasks - compact for mobile"""
+        """Load and display all tasks with full metadata (scroll h/l for more columns)"""
         tasks = task_store.list_all_tasks()
 
         table = self.query_one("#tasks-table", DataTable)
         table.clear()
         # Only add columns on first load
         if len(table.columns) == 0:
-            # Compact columns: S=Status, P=Priority, A=Agent health
-            table.add_columns("ID", "Title", "S", "P", "A")
+            # Full columns - use h/l to scroll horizontally
+            table.add_columns(
+                "ID", "Title", "Status", "Pri", "Cat", "Type",
+                "Project", "Agent", "Branch", "tmux", "Notes"
+            )
             table.cursor_type = "row"
 
         for task in tasks:
-            status_icon = {
-                "queued": "⚪",
-                "running": "🟢",
-                "blocked": "🟡",
-                "completed": "✅",
-                "failed": "🔴"
-            }.get(task.get('agent_status', 'queued'), "⚪")
+            status_display = {
+                "queued": "⚪ queued",
+                "running": "🟢 running",
+                "blocked": "🟡 blocked",
+                "completed": "✅ done",
+                "failed": "🔴 failed"
+            }.get(task.get('agent_status', 'queued'), "⚪ ?")
 
-            priority_icon = {
-                "high": "🔴",
-                "medium": "🟡",
-                "low": "🟢"
-            }.get(task.get('priority', 'medium'), "⚪")
+            priority_display = {
+                "high": "🔴 high",
+                "medium": "🟡 med",
+                "low": "🟢 low"
+            }.get(task.get('priority', 'medium'), "?")
 
             # Agent health indicator
             tmux_session = task.get('tmux_session')
             if tmux_session:
                 agent_status = get_agent_status(task['task_id'], tmux_session)
-                agent_icon = agent_status.get('icon', '-')
+                agent_display = f"{agent_status.get('icon', '?')} {agent_status.get('health', 'unknown')}"
             else:
-                agent_icon = "-"
+                agent_display = "- none"
+
+            # Category and type
+            category = task.get('category', '-')[:8]
+            task_type = task.get('type', '-')[:10]
+
+            # Project name
+            project = task.get('project_name', task.get('project', '-'))[:15]
+
+            # Branch (truncated)
+            branch = task.get('git_branch') or '-'
+            if len(branch) > 20:
+                branch = branch[:17] + "..."
+
+            # tmux session name
+            tmux_display = tmux_session[:15] if tmux_session else "-"
+
+            # Notes preview
+            notes = task.get('notes', '')
+            notes_preview = notes[:20] + "..." if len(notes) > 20 else (notes or "-")
 
             table.add_row(
                 task['task_id'],
-                task.get('title', '-')[:40],
-                status_icon,
-                priority_icon,
-                agent_icon
+                task.get('title', '-')[:35],
+                status_display,
+                priority_display,
+                category,
+                task_type,
+                project,
+                agent_display,
+                branch,
+                tmux_display,
+                notes_preview
             )
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
