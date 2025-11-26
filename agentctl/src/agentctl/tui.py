@@ -1464,6 +1464,7 @@ class TaskDetailScreen(Screen):
         ("f", "refresh_task_file", "Refresh TASK.md"),
         ("n", "edit_notes", "Edit Notes"),
         ("l", "save_session_log", "Save Log"),
+        ("p", "view_prompts", "Prompts"),
         ("1", "cycle_status", "Cycle Status"),
         ("2", "cycle_priority", "Cycle Priority"),
         ("3", "cycle_category", "Cycle Category"),
@@ -1790,6 +1791,29 @@ class TaskDetailScreen(Screen):
 
         self.app.push_screen(EditNotesModal(self.task_id, current_notes), handle_notes)
 
+    def action_view_prompts(self) -> None:
+        """View user prompts for this task's session"""
+        # First check if we have prompts in the database for this task
+        prompts = database.get_user_prompts(task_id=self.task_id, limit=1)
+
+        if prompts:
+            # We have stored prompts, show them
+            self.app.push_screen(UserPromptsScreen(task_id=self.task_id))
+        else:
+            # No stored prompts - try to capture and parse the current session
+            tmux_session = self.task_data.get('tmux_session') if self.task_data else None
+            if not tmux_session:
+                self.app.notify("No session data. Use 'l' to capture session first.", severity="warning")
+                return
+
+            # Capture session and parse it
+            filepath = save_session_log(self.task_id, tmux_session)
+            if filepath:
+                # Now show the prompts
+                self.app.push_screen(UserPromptsScreen(task_id=self.task_id))
+            else:
+                self.app.notify("Failed to capture session", severity="error")
+
 
 class ProjectListScreen(Screen):
     """Screen showing all projects"""
@@ -1931,6 +1955,7 @@ class AgentsMonitorScreen(Screen):
         ("a", "attach_tmux", "Attach tmux"),
         ("g", "open_ghostty", "Ghostty"),
         ("l", "save_session_log", "Save Log"),
+        ("p", "view_prompts", "Prompts"),
         ("r", "refresh", "Refresh"),
         ("j", "cursor_down", "Down"),
         ("k", "cursor_up", "Up"),
@@ -2120,6 +2145,36 @@ class AgentsMonitorScreen(Screen):
             self.app.notify(f"Session saved: {filepath}", severity="success")
         else:
             self.app.notify("Failed to capture session", severity="error")
+
+    def action_view_prompts(self) -> None:
+        """View user prompts for the selected agent's session"""
+        if not self.agents_data:
+            self.app.notify("No agent selected", severity="warning")
+            return
+
+        agent = self.agents_data[self.selected_index]
+        task_id = agent["task_id"]
+        tmux_session = agent.get("tmux_session")
+
+        # Check if we have prompts in the database for this task
+        prompts = database.get_user_prompts(task_id=task_id, limit=1)
+
+        if prompts:
+            # We have stored prompts, show them
+            self.app.push_screen(UserPromptsScreen(task_id=task_id))
+        else:
+            # No stored prompts - try to capture and parse the current session
+            if not tmux_session:
+                self.app.notify("No session data. Use 'l' to capture session first.", severity="warning")
+                return
+
+            # Capture session and parse it
+            filepath = save_session_log(task_id, tmux_session)
+            if filepath:
+                # Now show the prompts
+                self.app.push_screen(UserPromptsScreen(task_id=task_id))
+            else:
+                self.app.notify("Failed to capture session", severity="error")
 
 
 class UserPromptsScreen(Screen):
