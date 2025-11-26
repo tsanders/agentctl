@@ -2619,6 +2619,9 @@ class AgentDashboard(App):
         ("t", "manage_tasks", "Tasks"),
         ("a", "monitor_agents", "Agents"),
         ("y", "view_analytics", "Analytics"),
+        ("j", "cursor_down", "Down"),
+        ("k", "cursor_up", "Up"),
+        ("enter", "select_agent", "Select"),
     ]
 
     def compose(self) -> ComposeResult:
@@ -2662,6 +2665,34 @@ class AgentDashboard(App):
     def action_view_analytics(self) -> None:
         """Open analytics screen"""
         self.push_screen(AnalyticsScreen())
+
+    def action_cursor_down(self) -> None:
+        """Move cursor down in agents table (vim j)"""
+        try:
+            table = self.query_one("#agents-table", DataTable)
+            table.action_cursor_down()
+        except Exception:
+            pass
+
+    def action_cursor_up(self) -> None:
+        """Move cursor up in agents table (vim k)"""
+        try:
+            table = self.query_one("#agents-table", DataTable)
+            table.action_cursor_up()
+        except Exception:
+            pass
+
+    def action_select_agent(self) -> None:
+        """Open task detail for selected agent"""
+        try:
+            table = self.query_one("#agents-table", DataTable)
+            if table.row_count > 0 and table.cursor_row is not None:
+                row = table.get_row_at(table.cursor_row)
+                if row:
+                    task_id = str(row[0])
+                    self.push_screen(TaskDetailScreen(task_id))
+        except Exception:
+            pass
 
 
 def run_dashboard():
