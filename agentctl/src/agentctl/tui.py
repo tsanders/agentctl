@@ -2025,11 +2025,15 @@ class AgentCard(Static):
     def compose(self) -> ComposeResult:
         yield Static("", id="card-header", classes="agent-card-header")
 
-        # Split container: tmux output (left) and metadata (right)
+        # Three-column layout: tmux output | workflow | metadata
         yield Horizontal(
             Container(
                 Static("", id="card-output", classes="agent-card-output"),
                 classes="agent-card-left"
+            ),
+            Container(
+                Static("", id="card-workflow", classes="agent-card-workflow"),
+                classes="agent-card-middle"
             ),
             Container(
                 Static("", id="card-metadata", classes="agent-card-metadata"),
@@ -2074,13 +2078,33 @@ class AgentCard(Static):
             output_lines.append(line)
         output_text = "\n".join(output_lines)
 
+        # Build workflow progress
+        workflow_text = self._build_workflow_text()
+
         # Update widgets
         try:
             self.query_one("#card-header", Static).update(header)
             self.query_one("#card-output", Static).update(output_text)
+            self.query_one("#card-workflow", Static).update(workflow_text)
             self.query_one("#card-metadata", Static).update(self._build_metadata_text())
         except Exception:
             pass  # Widget not yet mounted
+
+    def _build_workflow_text(self) -> str:
+        """Build workflow progress text for middle column"""
+        task_id = self.agent_data.get("task_id", "")
+        task = task_store.get_task(task_id) if task_id else {}
+        if not task:
+            return "[dim]No workflow data[/dim]"
+
+        current_phase = task.get("phase")
+        if not current_phase:
+            return "[dim]No phase set[/dim]"
+
+        lines = ["[bold]Workflow:[/bold]"]
+        workflow_lines = self._build_compact_workflow(current_phase)
+        lines.extend(workflow_lines)
+        return "\n".join(lines)
 
     def _build_metadata_text(self) -> str:
         """Build the metadata display text for the right panel"""
@@ -2129,14 +2153,6 @@ class AgentCard(Static):
         due = task.get("due")
         if due:
             lines.append(f"[bold]Due:[/bold] {due}")
-
-        # Workflow progress (compact view)
-        current_phase = task.get("phase")
-        if current_phase:
-            lines.append("")  # Blank line for spacing
-            lines.append("[bold]Workflow:[/bold]")
-            workflow_lines = self._build_compact_workflow(current_phase)
-            lines.extend(workflow_lines)
 
         # Notes (if any)
         notes = agent.get("notes") or task.get("notes", "")
@@ -2863,6 +2879,13 @@ class AgentDashboard(App):
         height: auto;
     }
 
+    .agent-card-middle {
+        width: 20;
+        height: auto;
+        padding-left: 1;
+        border-left: solid $primary-darken-2;
+    }
+
     .agent-card-right {
         width: 35;
         height: auto;
@@ -2874,6 +2897,11 @@ class AgentDashboard(App):
         color: $text-muted;
         height: auto;
         margin-left: 2;
+    }
+
+    .agent-card-workflow {
+        color: $text;
+        height: auto;
     }
 
     .agent-card-metadata {
