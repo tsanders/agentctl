@@ -1969,6 +1969,7 @@ class AgentsMonitorScreen(Screen):
     def action_open_ghostty(self) -> None:
         """Open selected agent's tmux session in a new Ghostty window"""
         import subprocess
+        import platform
         from agentctl.core.tmux import session_exists
 
         if not self.agents_data:
@@ -1994,13 +1995,23 @@ class AgentsMonitorScreen(Screen):
             return
 
         try:
-            # Open new Ghostty window with tmux attach command
-            subprocess.Popen(
-                ["ghostty", "-e", "tmux", "attach", "-t", tmux_session],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True
-            )
+            if platform.system() == "Darwin":
+                # macOS: Use open command with Ghostty's -e flag to run command
+                subprocess.Popen(
+                    ["open", "-na", "/Applications/Ghostty.app", "--args",
+                     "-e", "tmux", "attach", "-t", tmux_session],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True
+                )
+            else:
+                # Linux: Use ghostty +new-window action
+                subprocess.Popen(
+                    ["ghostty", "+new-window", "-e", "tmux", "attach", "-t", tmux_session],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True
+                )
             self.app.notify(f"Opened {tmux_session} in Ghostty", severity="success")
         except FileNotFoundError:
             self.app.notify("Ghostty not found. Install from ghostty.org", severity="error")
