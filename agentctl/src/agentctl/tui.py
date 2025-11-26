@@ -806,7 +806,8 @@ class StartTaskModal(ModalScreen):
                     from agentctl.core.worktree import create_worktree, get_worktree_path, get_branch_name
 
                     repo_path = Path(self.task_data['repository_path']).expanduser()
-                    base_branch = self.task_data.get('repository_default_branch', 'main')
+                    # Try both key names for compatibility (task_store uses 'default_branch', database uses 'repository_default_branch')
+                    base_branch = self.task_data.get('default_branch') or self.task_data.get('repository_default_branch', 'main')
 
                     worktree_info = create_worktree(
                         repo_path,
