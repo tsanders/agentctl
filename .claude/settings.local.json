@@ -4,7 +4,12 @@
       "Bash(python3:*)",
       "Bash(source .venv/bin/activate)",
       "Bash(python:*)",
-      "Skill(superpowers:brainstorming)"
+      "Skill(superpowers:brainstorming)",
+      "Bash(agentctl status:*)",
+      "Bash(agentctl queue:*)",
+      "Bash(agentctl tasks:*)",
+      "Bash(agentctl task:*)",
+      "Bash(agentctl agents:*)"
     ],
     "deny": [],
     "ask": []
