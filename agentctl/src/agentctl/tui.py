@@ -640,37 +640,21 @@ class EditTaskModal(ModalScreen):
                 if repo_id and repo_id != Select.BLANK:
                     final_repo_id = repo_id
 
-                # Check if this is a markdown task
-                task_source = self.task_data.get('source', 'database')
-                if task_source == 'markdown':
-                    # Update markdown task
-                    updates = {
-                        'title': title.strip(),
-                        'description': description.strip() if description else None,
-                        'project_id': project_id,
-                        'repository_id': final_repo_id,
-                        'category': category,
-                        'type': task_type.strip(),
-                        'priority': priority,
-                        'agent_status': agent_status
-                    }
-                    success = update_task(self.task_id, updates)
-                    if not success:
-                        self.app.notify("Failed to update markdown task", severity="error")
-                        return
-                else:
-                    # Update database task
-                    database.update_task(
-                        self.task_id,
-                        title=title.strip(),
-                        description=description.strip() if description else None,
-                        project_id=project_id,
-                        repository_id=final_repo_id,
-                        category=category,
-                        type=task_type.strip(),
-                        priority=priority,
-                        agent_status=agent_status
-                    )
+                # Update task in markdown file
+                updates = {
+                    'title': title.strip(),
+                    'description': description.strip() if description else None,
+                    'project_id': project_id,
+                    'repository_id': final_repo_id,
+                    'category': category,
+                    'type': task_type.strip(),
+                    'priority': priority,
+                    'agent_status': agent_status
+                }
+                success = update_task(self.task_id, updates)
+                if not success:
+                    self.app.notify("Failed to update task", severity="error")
+                    return
 
                 database.add_event(self.task_id, "updated")
                 self.dismiss(self.task_id)
@@ -768,24 +752,14 @@ class StartTaskModal(ModalScreen):
 
             try:
                 from agentctl.core.tmux import create_session
+                from datetime import datetime as dt
 
-                # Check if this is a markdown task
-                task_source = self.task_data.get('source', 'database')
-                if task_source == 'markdown':
-                    # Update markdown task agent_status
-                    from datetime import datetime as dt
-                    updates = {
-                        'agent_status': 'running',
-                        'started_at': dt.now().isoformat()
-                    }
-                    update_task(self.task_id, updates)
-                else:
-                    # Update database task agent_status
-                    database.update_task_status(
-                        self.task_id,
-                        "running",
-                        started_at=int(datetime.now().timestamp())
-                    )
+                # Update task status
+                updates = {
+                    'agent_status': 'running',
+                    'started_at': dt.now().isoformat()
+                }
+                update_task(self.task_id, updates)
 
                 # Determine working directory and session name
                 tmux_session_name = f"agent-{self.task_id}"
@@ -809,17 +783,10 @@ class StartTaskModal(ModalScreen):
                     working_dir = Path(worktree_info['worktree_path'])
 
                     # Update task with worktree and branch info
-                    if task_source == 'markdown':
-                        update_task(self.task_id, {
-                            'git_branch': worktree_info['branch_name'],
-                            'worktree_path': worktree_info['worktree_path']
-                        })
-                    else:
-                        database.update_task(
-                            self.task_id,
-                            git_branch=worktree_info['branch_name'],
-                            worktree_path=worktree_info['worktree_path']
-                        )
+                    update_task(self.task_id, {
+                        'git_branch': worktree_info['branch_name'],
+                        'worktree_path': worktree_info['worktree_path']
+                    })
                 else:
                     # Use repository path or current directory
                     if self.task_data.get('repository_path'):
@@ -832,10 +799,7 @@ class StartTaskModal(ModalScreen):
                     tmux_session = create_session(tmux_session_name, working_dir)
 
                     # Update task with tmux session info
-                    if task_source == 'markdown':
-                        update_task(self.task_id, {'tmux_session': tmux_session})
-                    else:
-                        database.update_task(self.task_id, tmux_session=tmux_session)
+                    update_task(self.task_id, {'tmux_session': tmux_session})
 
                     # Copy task file to working directory
                     copy_task_file_to_workdir(self.task_id, working_dir)
@@ -1207,14 +1171,10 @@ class TaskManagementScreen(Screen):
             def handle_delete(confirmed: bool) -> None:
                 if confirmed:
                     try:
-                        # Check if markdown or database task
-                        if task_data and task_data.get('source') == 'markdown':
-                            success = delete_task(task_id)
-                            if not success:
-                                self.app.notify("Failed to delete markdown task", severity="error")
-                                return
-                        else:
-                            database.delete_task(task_id)
+                        success = delete_task(task_id)
+                        if not success:
+                            self.app.notify("Failed to delete task", severity="error")
+                            return
                         self.load_tasks()
                         self.app.notify(f"Task {task_id} deleted", severity="warning")
                     except Exception as e:
@@ -1578,48 +1538,38 @@ class TaskDetailScreen(Screen):
         self.app.pop_screen()
 
     def action_edit_in_nvim(self) -> None:
-        """Open nvim for markdown tasks, modal for database tasks"""
-        # Check if this is a markdown task
-        task_source = self.task_data.get('source', 'database')
-        if task_source == 'markdown':
-            # Get task file path
-            project = database.get_project(self.task_data['project_id'])
-            if project and project.get('tasks_path'):
-                from pathlib import Path
-                task_file = Path(project['tasks_path']) / f"{self.task_id}.md"
+        """Open nvim to edit task markdown file"""
+        # Get task file path
+        project = database.get_project(self.task_data['project_id'])
+        if project and project.get('tasks_path'):
+            from pathlib import Path
+            task_file = Path(project['tasks_path']) / f"{self.task_id}.md"
 
-                if task_file.exists():
-                    # Define callback to reload after nvim closes
-                    def after_nvim():
-                        # Reload the task details to show updated data
-                        self.load_task_details()
-                        self.app.notify(f"Task {self.task_id} updated", severity="success")
-
-                    # Suspend TUI and open nvim
-                    import subprocess
-
-                    # Store the callback for after resume
-                    self._after_resume_callback = after_nvim
-
-                    # Exit TUI, run nvim, then re-enter
-                    with self.app.suspend():
-                        subprocess.run(['nvim', str(task_file)])
-
-                    # Execute callback
-                    if hasattr(self, '_after_resume_callback'):
-                        self._after_resume_callback()
-                        delattr(self, '_after_resume_callback')
-                else:
-                    self.app.notify(f"Task file not found: {task_file}", severity="error")
-            else:
-                self.app.notify("Task has no tasks_path configured", severity="error")
-        else:
-            # Database task - use modal
-            def check_result(result):
-                if result:
+            if task_file.exists():
+                # Define callback to reload after nvim closes
+                def after_nvim():
+                    # Reload the task details to show updated data
                     self.load_task_details()
+                    self.app.notify(f"Task {self.task_id} updated", severity="success")
 
-            self.app.push_screen(EditTaskModal(self.task_id), check_result)
+                # Suspend TUI and open nvim
+                import subprocess
+
+                # Store the callback for after resume
+                self._after_resume_callback = after_nvim
+
+                # Exit TUI, run nvim, then re-enter
+                with self.app.suspend():
+                    subprocess.run(['nvim', str(task_file)])
+
+                # Execute callback
+                if hasattr(self, '_after_resume_callback'):
+                    self._after_resume_callback()
+                    delattr(self, '_after_resume_callback')
+            else:
+                self.app.notify(f"Task file not found: {task_file}", severity="error")
+        else:
+            self.app.notify("Task has no tasks_path configured", severity="error")
 
     def action_start_task(self) -> None:
         """Open start modal to begin work on task"""
@@ -1664,25 +1614,15 @@ class TaskDetailScreen(Screen):
 
         from datetime import datetime
 
-        # Check if this is a markdown task
-        task_source = self.task_data.get('source', 'database')
-        if task_source == 'markdown':
-            # Update markdown task
-            updates = {
-                'agent_status': 'completed',
-                'completed_at': datetime.now().isoformat()
-            }
-            success = update_task(self.task_id, updates)
-            if not success:
-                self.app.notify("Failed to update markdown task", severity="error")
-                return
-        else:
-            # Update database task
-            database.update_task_status(
-                self.task_id,
-                "completed",
-                completed_at=int(datetime.now().timestamp())
-            )
+        # Update task status
+        updates = {
+            'agent_status': 'completed',
+            'completed_at': datetime.now().isoformat()
+        }
+        success = update_task(self.task_id, updates)
+        if not success:
+            self.app.notify("Failed to update task", severity="error")
+            return
 
         database.add_event(self.task_id, "completed")
         self.app.notify(f"Task {self.task_id} marked as completed", severity="success")
@@ -1694,17 +1634,11 @@ class TaskDetailScreen(Screen):
 
         def handle_delete(confirmed: bool) -> None:
             if confirmed:
-                # Check if this is a markdown task
-                task_source = self.task_data.get('source', 'database')
-                if task_source == 'markdown':
-                    # Delete markdown task
-                    success = delete_task(self.task_id)
-                    if not success:
-                        self.app.notify("Failed to delete markdown task", severity="error")
-                        return
-                else:
-                    # Delete database task
-                    database.delete_task(self.task_id)
+                # Delete task
+                success = delete_task(self.task_id)
+                if not success:
+                    self.app.notify("Failed to delete task", severity="error")
+                    return
 
                 database.add_event(self.task_id, "deleted")
                 self.app.notify(f"Task {self.task_id} deleted", severity="warning")
@@ -1741,14 +1675,10 @@ class TaskDetailScreen(Screen):
 
     def _update_field(self, field: str, value: str) -> None:
         """Update a single field in the task"""
-        task_source = self.task_data.get('source', 'database')
-
-        if task_source == 'markdown':
-            # Update markdown task
-            success = update_task(self.task_id, {field: value})
-            if not success:
-                self.app.notify(f"Failed to update {field}", severity="error")
-                return
+        success = update_task(self.task_id, {field: value})
+        if not success:
+            self.app.notify(f"Failed to update {field}", severity="error")
+            return
 
         self.app.notify(f"{field.capitalize()} changed to: {value}", severity="success")
         self.load_task_details()

@@ -1,6 +1,7 @@
 """CLI entry point for agentctl"""
 
 import typer
+from pathlib import Path
 from rich.console import Console
 from rich.table import Table
 from rich import box
@@ -429,75 +430,82 @@ def task_create(
 @task_app.command("validate")
 def task_validate(
     project_id: Optional[str] = typer.Argument(None, help="Project ID (optional, validates all if not specified)"),
+    strict: bool = typer.Option(False, "--strict", "-s", help="Enable strict validation of agentctl-specific fields"),
 ):
     """Validate markdown task files"""
-    from agentctl.core import task_sync
+    from agentctl.core import task_md
+
+    def validate_project(pid: str) -> tuple:
+        """Validate tasks for a single project. Returns (valid_count, errors)."""
+        project = database.get_project(pid)
+        if not project:
+            return 0, [f"Project {pid} not found"]
+
+        tasks_path_str = project.get('tasks_path')
+        if not tasks_path_str:
+            return 0, []  # No tasks path configured
+
+        tasks_path = Path(tasks_path_str)
+        if not tasks_path.exists():
+            return 0, [f"Tasks path does not exist: {tasks_path}"]
+
+        valid_count = 0
+        errors = []
+
+        for md_file in tasks_path.glob("*.md"):
+            task_data, body, parse_errors = task_md.parse_task_file(md_file, strict=strict)
+
+            if parse_errors:
+                errors.append(f"{md_file.name}: {'; '.join(parse_errors)}")
+            elif task_data['project_id'] != pid:
+                errors.append(f"{md_file.name}: project_id '{task_data['project_id']}' doesn't match project '{pid}'")
+            else:
+                valid_count += 1
+
+        return valid_count, errors
 
     if project_id:
         # Validate specific project
-        result = task_sync.sync_project_tasks(project_id)
+        valid_count, errors = validate_project(project_id)
 
         console.print(f"\n📋 [bold]Validation Results for {project_id}[/bold]")
-        console.print(f"  ✓ Valid tasks: [green]{result.synced_count}[/green]")
-        console.print(f"  ✗ Invalid tasks: [red]{result.error_count}[/red]")
+        console.print(f"  ✓ Valid tasks: [green]{valid_count}[/green]")
+        console.print(f"  ✗ Invalid tasks: [red]{len(errors)}[/red]")
 
-        if result.errors:
+        if errors:
             console.print("\n[red]Errors:[/red]")
-            for error in result.errors:
+            for error in errors:
                 console.print(f"  • {error}")
 
-        raise typer.Exit(0 if result.error_count == 0 else 1)
+        raise typer.Exit(0 if len(errors) == 0 else 1)
     else:
         # Validate all projects
-        results = task_sync.sync_all_tasks()
+        projects = database.list_projects()
+        total_valid = 0
+        total_errors = 0
+        all_errors = {}
 
-        total_valid = sum(r.synced_count for r in results.values())
-        total_invalid = sum(r.error_count for r in results.values())
+        for project in projects:
+            pid = project['id']
+            valid_count, errors = validate_project(pid)
+            total_valid += valid_count
+            total_errors += len(errors)
+            if errors:
+                all_errors[pid] = errors
 
         console.print(f"\n📋 [bold]Validation Results (All Projects)[/bold]")
-        console.print(f"  Projects scanned: {len(results)}")
+        console.print(f"  Projects scanned: {len(projects)}")
         console.print(f"  ✓ Valid tasks: [green]{total_valid}[/green]")
-        console.print(f"  ✗ Invalid tasks: [red]{total_invalid}[/red]")
+        console.print(f"  ✗ Invalid tasks: [red]{total_errors}[/red]")
 
-        for project_id, result in results.items():
-            if result.error_count > 0:
-                console.print(f"\n[yellow]{project_id}:[/yellow]")
-                for error in result.errors[:3]:  # Show first 3 errors per project
-                    console.print(f"  • {error}")
-                if len(result.errors) > 3:
-                    console.print(f"  ... and {len(result.errors) - 3} more errors")
+        for pid, errors in all_errors.items():
+            console.print(f"\n[yellow]{pid}:[/yellow]")
+            for error in errors[:3]:  # Show first 3 errors per project
+                console.print(f"  • {error}")
+            if len(errors) > 3:
+                console.print(f"  ... and {len(errors) - 3} more errors")
 
-        raise typer.Exit(0 if total_invalid == 0 else 1)
-
-
-@task_app.command("sync")
-def task_sync_cmd(
-    project_id: Optional[str] = typer.Argument(None, help="Project ID (optional, syncs all if not specified)"),
-):
-    """Manually sync markdown task files to database"""
-    from agentctl.core import task_sync
-
-    if project_id:
-        # Sync specific project
-        with console.status(f"[bold green]Syncing tasks for {project_id}..."):
-            result = task_sync.sync_project_tasks(project_id)
-
-        console.print(f"✓ Synced {result.synced_count} tasks for {project_id}")
-        if result.error_count > 0:
-            console.print(f"⚠️  {result.error_count} errors encountered")
-            console.print("Run [cyan]agentctl task validate {project_id}[/cyan] for details")
-    else:
-        # Sync all projects
-        with console.status("[bold green]Syncing all projects..."):
-            results = task_sync.sync_all_tasks()
-
-        total_synced = sum(r.synced_count for r in results.values())
-        total_errors = sum(r.error_count for r in results.values())
-
-        console.print(f"✓ Synced {total_synced} tasks across {len(results)} projects")
-        if total_errors > 0:
-            console.print(f"⚠️  {total_errors} errors encountered")
-            console.print("Run [cyan]agentctl task validate[/cyan] for details")
+        raise typer.Exit(0 if total_errors == 0 else 1)
 
 
 @task_app.command("refresh")
