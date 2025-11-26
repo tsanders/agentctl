@@ -14,7 +14,7 @@ from agentctl.core import task_store
 from agentctl.core.task import create_task, update_task, delete_task, copy_task_file_to_workdir
 from agentctl.core.agent_monitor import (
     get_agent_status, get_all_agent_statuses, get_health_display, HEALTH_ICONS,
-    check_and_notify_state_changes
+    check_and_notify_state_changes, save_session_log
 )
 
 
@@ -1463,6 +1463,7 @@ class TaskDetailScreen(Screen):
         ("a", "attach_tmux", "Attach tmux"),
         ("f", "refresh_task_file", "Refresh TASK.md"),
         ("n", "edit_notes", "Edit Notes"),
+        ("l", "save_session_log", "Save Log"),
         ("1", "cycle_status", "Cycle Status"),
         ("2", "cycle_priority", "Cycle Priority"),
         ("3", "cycle_category", "Cycle Category"),
@@ -1477,6 +1478,19 @@ class TaskDetailScreen(Screen):
         super().__init__()
         self.task_id = task_id
         self.task_data = None
+
+    def action_save_session_log(self) -> None:
+        """Save the tmux session output to a log file"""
+        tmux_session = self.task_data.get('tmux_session') if self.task_data else None
+        if not tmux_session:
+            self.app.notify("No tmux session for this task", severity="warning")
+            return
+
+        filepath = save_session_log(self.task_id, tmux_session)
+        if filepath:
+            self.app.notify(f"Session saved: {filepath}", severity="success")
+        else:
+            self.app.notify("Failed to capture session", severity="error")
 
     def action_scroll_down(self) -> None:
         """Scroll down (vim j)"""
@@ -1916,6 +1930,7 @@ class AgentsMonitorScreen(Screen):
         ("enter", "view_task", "View Task"),
         ("a", "attach_tmux", "Attach tmux"),
         ("g", "open_ghostty", "Ghostty"),
+        ("l", "save_session_log", "Save Log"),
         ("r", "refresh", "Refresh"),
         ("j", "cursor_down", "Down"),
         ("k", "cursor_up", "Up"),
@@ -2085,6 +2100,26 @@ class AgentsMonitorScreen(Screen):
             self.app.notify("Ghostty not found. Install from ghostty.org", severity="error")
         except Exception as e:
             self.app.notify(f"Failed to open Ghostty: {e}", severity="error")
+
+    def action_save_session_log(self) -> None:
+        """Save the selected agent's tmux session to a log file"""
+        if not self.agents_data:
+            self.app.notify("No agent selected", severity="warning")
+            return
+
+        agent = self.agents_data[self.selected_index]
+        task_id = agent["task_id"]
+        tmux_session = agent.get("tmux_session")
+
+        if not tmux_session:
+            self.app.notify("No tmux session for this agent", severity="warning")
+            return
+
+        filepath = save_session_log(task_id, tmux_session)
+        if filepath:
+            self.app.notify(f"Session saved: {filepath}", severity="success")
+        else:
+            self.app.notify("Failed to capture session", severity="error")
 
 
 class AgentDashboard(App):

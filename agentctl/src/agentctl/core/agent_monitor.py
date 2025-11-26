@@ -129,6 +129,130 @@ def capture_session_output(session_name: str, lines: int = 100) -> List[str]:
         return []
 
 
+def capture_full_session(session_name: str) -> str:
+    """Capture the entire scrollback buffer from a tmux session.
+
+    Args:
+        session_name: The tmux session name
+
+    Returns:
+        Full session output as a string, or empty string if not found
+    """
+    import subprocess
+
+    try:
+        # Use -S - to capture from the start of history
+        # -E captures to the end
+        result = subprocess.run(
+            ['tmux', 'capture-pane', '-t', session_name, '-p', '-S', '-', '-E', '-'],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        if result.returncode == 0:
+            return result.stdout
+        return ""
+    except Exception:
+        return ""
+
+
+def get_session_logs_dir() -> 'Path':
+    """Get the directory for storing session logs.
+
+    Returns:
+        Path to ~/.agentctl/sessions directory (created if needed)
+    """
+    from pathlib import Path
+
+    logs_dir = Path.home() / ".agentctl" / "sessions"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    return logs_dir
+
+
+def save_session_log(task_id: str, session_name: str, append_timestamp: bool = True) -> Optional[str]:
+    """Capture and save a tmux session to a log file.
+
+    Args:
+        task_id: Task ID for the filename
+        session_name: tmux session name to capture
+        append_timestamp: If True, append timestamp to filename
+
+    Returns:
+        Path to the saved file, or None if capture failed
+    """
+    from pathlib import Path
+
+    content = capture_full_session(session_name)
+    if not content:
+        return None
+
+    logs_dir = get_session_logs_dir()
+
+    if append_timestamp:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"{task_id}_{timestamp}.log"
+    else:
+        filename = f"{task_id}.log"
+
+    filepath = logs_dir / filename
+
+    try:
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(f"# Session log for {task_id}\n")
+            f.write(f"# tmux session: {session_name}\n")
+            f.write(f"# Captured at: {datetime.now().isoformat()}\n")
+            f.write("#" + "=" * 60 + "\n\n")
+            f.write(content)
+        return str(filepath)
+    except Exception:
+        return None
+
+
+def get_session_logs(task_id: Optional[str] = None) -> List[Dict]:
+    """List saved session logs.
+
+    Args:
+        task_id: Optional task ID to filter by
+
+    Returns:
+        List of log file info dicts with 'path', 'task_id', 'timestamp', 'size'
+    """
+    from pathlib import Path
+
+    logs_dir = get_session_logs_dir()
+    logs = []
+
+    pattern = f"{task_id}_*.log" if task_id else "*.log"
+
+    for logfile in logs_dir.glob(pattern):
+        # Parse filename: TASK-ID_YYYYMMDD_HHMMSS.log
+        name = logfile.stem
+        parts = name.rsplit('_', 2)
+
+        if len(parts) >= 3:
+            tid = parts[0]
+            try:
+                timestamp = datetime.strptime(f"{parts[1]}_{parts[2]}", "%Y%m%d_%H%M%S")
+            except ValueError:
+                timestamp = None
+        else:
+            tid = name
+            timestamp = None
+
+        logs.append({
+            'path': str(logfile),
+            'filename': logfile.name,
+            'task_id': tid,
+            'timestamp': timestamp,
+            'size': logfile.stat().st_size,
+        })
+
+    # Sort by timestamp descending (newest first)
+    logs.sort(key=lambda x: x.get('timestamp') or datetime.min, reverse=True)
+
+    return logs
+
+
 def tail_session_output(session_name: str, lines: int = 100, interval: float = 0.5):
     """Generator that yields new output lines from a tmux session
 
