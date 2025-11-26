@@ -2130,6 +2130,14 @@ class AgentCard(Static):
         if due:
             lines.append(f"[bold]Due:[/bold] {due}")
 
+        # Workflow progress (compact view)
+        current_phase = task.get("phase")
+        if current_phase:
+            lines.append("")  # Blank line for spacing
+            lines.append("[bold]Workflow:[/bold]")
+            workflow_lines = self._build_compact_workflow(current_phase)
+            lines.extend(workflow_lines)
+
         # Notes (if any)
         notes = agent.get("notes") or task.get("notes", "")
         if notes:
@@ -2143,6 +2151,25 @@ class AgentCard(Static):
             lines.append(f"[bold]Elapsed:[/bold] {elapsed}")
 
         return "\n".join(lines)
+
+    def _build_compact_workflow(self, current_phase: Optional[str]) -> List[str]:
+        """Build compact workflow progress for agent card"""
+        lines = []
+        for phase in task_md.VALID_PHASE:
+            display_name = task_md.get_phase_display_name(phase)
+
+            # Shorten display names for compact view
+            short_name = display_name[:12]  # Truncate long names
+
+            if phase == current_phase:
+                lines.append(f"▶ {short_name}")
+            elif not current_phase or task_md.VALID_PHASE.index(phase) < task_md.VALID_PHASE.index(current_phase):
+                lines.append(f"✓ [dim]{short_name}[/dim]")
+            else:
+                # Skip future phases in compact view to save space
+                continue
+
+        return lines
 
 
 class AgentsMonitorScreen(Screen):
