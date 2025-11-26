@@ -1138,65 +1138,54 @@ class TaskManagementScreen(Screen):
         self.app.push_screen(CreateTaskPromptScreen(), check_result)
 
     def action_edit_task(self) -> None:
-        """Edit selected task - open nvim for markdown, modal for database"""
+        """Edit selected task in nvim"""
         table = self.query_one("#tasks-table", DataTable)
         if table.row_count > 0 and table.cursor_row is not None:
             row = table.get_row_at(table.cursor_row)
-            source = str(row[0])  # "[MD]" or "[DB]"
-            task_id = str(row[1])  # Task ID is second column now
+            task_id = str(row[0])  # Task ID is first column
 
-            # Check if this is a markdown task
-            if source == "[MD]":
-                # Get task to find the markdown file path
-                task = task_store.get_task(task_id)
-                if task:
-                    project = database.get_project(task['project_id'])
-                    if project and project.get('tasks_path'):
-                        from pathlib import Path
-                        task_file = Path(project['tasks_path']) / f"{task_id}.md"
+            # Get task to find the markdown file path
+            task = task_store.get_task(task_id)
+            if task:
+                project = database.get_project(task['project_id'])
+                if project and project.get('tasks_path'):
+                    from pathlib import Path
+                    task_file = Path(project['tasks_path']) / f"{task_id}.md"
 
-                        if task_file.exists():
-                            # Define callback to reload after nvim closes
-                            def after_nvim():
-                                # Reload the task list to show updated data
-                                self.load_tasks()
-                                self.app.notify(f"Task {task_id} updated", severity="success")
+                    if task_file.exists():
+                        # Define callback to reload after nvim closes
+                        def after_nvim():
+                            # Reload the task list to show updated data
+                            self.load_tasks()
+                            self.app.notify(f"Task {task_id} updated", severity="success")
 
-                            # Suspend TUI and open nvim
-                            import subprocess
-                            import os
+                        # Suspend TUI and open nvim
+                        import subprocess
 
-                            # Store the callback for after resume
-                            self._after_resume_callback = after_nvim
+                        # Store the callback for after resume
+                        self._after_resume_callback = after_nvim
 
-                            # Exit TUI, run nvim, then re-enter
-                            with self.app.suspend():
-                                subprocess.run(['nvim', str(task_file)])
+                        # Exit TUI, run nvim, then re-enter
+                        with self.app.suspend():
+                            subprocess.run(['nvim', str(task_file)])
 
-                            # Execute callback
-                            if hasattr(self, '_after_resume_callback'):
-                                self._after_resume_callback()
-                                delattr(self, '_after_resume_callback')
-                        else:
-                            self.app.notify(f"Task file not found: {task_file}", severity="error")
+                        # Execute callback
+                        if hasattr(self, '_after_resume_callback'):
+                            self._after_resume_callback()
+                            delattr(self, '_after_resume_callback')
                     else:
-                        self.app.notify("Task has no tasks_path configured", severity="error")
+                        self.app.notify(f"Task file not found: {task_file}", severity="error")
                 else:
-                    self.app.notify(f"Task {task_id} not found", severity="error")
+                    self.app.notify("Task has no tasks_path configured", severity="error")
             else:
-                # Database task - use modal
-                def check_result(result):
-                    if result:
-                        self.load_tasks()
-
-                self.app.push_screen(EditTaskModal(task_id), check_result)
+                self.app.notify(f"Task {task_id} not found", severity="error")
 
     def action_delete_task(self) -> None:
         """Delete selected task with confirmation"""
         table = self.query_one("#tasks-table", DataTable)
         if table.row_count > 0 and table.cursor_row is not None:
             row = table.get_row_at(table.cursor_row)
-            task_id = str(row[1])  # Task ID is second column now
+            task_id = str(row[0])  # Task ID is first column
 
             # Get task details for confirmation
             task_data = task_store.get_task(task_id)
