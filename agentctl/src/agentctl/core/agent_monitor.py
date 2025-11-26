@@ -326,6 +326,8 @@ def get_all_agent_statuses() -> List[Dict]:
         status = get_agent_status(task["task_id"], tmux_session)
         status["task_title"] = task.get("title", "")
         status["task_agent_status"] = task.get("agent_status", "")
+        status["project"] = task.get("project_name", task.get("project", ""))
+        status["elapsed"] = task.get("elapsed", "-")
         agents.append(status)
 
     # Sort by health priority: error > waiting > idle > active > exited

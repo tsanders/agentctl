@@ -12,6 +12,28 @@ from agentctl.core import database
 from agentctl.core.task_md import parse_task_file
 
 
+def _calculate_elapsed(task_data: Dict) -> None:
+    """Calculate and add elapsed time fields to task data in place."""
+    started_at = task_data.get('started_at')
+    if started_at:
+        try:
+            if isinstance(started_at, str):
+                start_dt = datetime.fromisoformat(started_at)
+            else:
+                start_dt = datetime.fromtimestamp(started_at)
+            elapsed = datetime.now() - start_dt
+            hours, remainder = divmod(int(elapsed.total_seconds()), 3600)
+            minutes = remainder // 60
+            task_data['elapsed'] = f"{hours}h {minutes}m"
+            task_data['elapsed_minutes'] = int(elapsed.total_seconds() / 60)
+        except (ValueError, TypeError):
+            task_data['elapsed'] = '-'
+            task_data['elapsed_minutes'] = 0
+    else:
+        task_data['elapsed'] = '-'
+        task_data['elapsed_minutes'] = 0
+
+
 def get_all_tasks(
     project_id: Optional[str] = None,
     agent_status: Optional[str] = None,
@@ -81,6 +103,9 @@ def get_all_tasks(
                     task_data['repository_name'] = repo.get('name')
                     task_data['repository_path'] = repo.get('path')
 
+            # Calculate elapsed time
+            _calculate_elapsed(task_data)
+
             tasks.append(task_data)
 
     return tasks
@@ -125,6 +150,9 @@ def get_task(task_id: str) -> Optional[Dict]:
                         task_data['repository_path'] = repo.get('path')
                         task_data['default_branch'] = repo.get('default_branch', 'main')
 
+                # Calculate elapsed time
+                _calculate_elapsed(task_data)
+
                 return task_data
 
     return None
@@ -151,26 +179,6 @@ def get_active_agents() -> List[Dict]:
     for task in tasks:
         status = task.get('agent_status', 'queued')
         if status in ('running', 'blocked'):
-            # Calculate elapsed time if started
-            started_at = task.get('started_at')
-            if started_at:
-                try:
-                    if isinstance(started_at, str):
-                        start_dt = datetime.fromisoformat(started_at)
-                    else:
-                        start_dt = datetime.fromtimestamp(started_at)
-                    elapsed = datetime.now() - start_dt
-                    hours, remainder = divmod(int(elapsed.total_seconds()), 3600)
-                    minutes = remainder // 60
-                    task['elapsed'] = f"{hours}h {minutes}m"
-                    task['elapsed_minutes'] = int(elapsed.total_seconds() / 60)
-                except (ValueError, TypeError):
-                    task['elapsed'] = '-'
-                    task['elapsed_minutes'] = 0
-            else:
-                task['elapsed'] = '-'
-                task['elapsed_minutes'] = 0
-
             # Ensure required fields have defaults
             task.setdefault('phase', 'unknown')
             task.setdefault('agent_type', 'unknown')

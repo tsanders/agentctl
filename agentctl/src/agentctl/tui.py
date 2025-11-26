@@ -24,32 +24,66 @@ class AgentStatusWidget(Static):
 
     def on_mount(self) -> None:
         table = self.query_one("#agents-table", DataTable)
-        table.add_columns("Task ID", "Project", "Status", "Phase", "Elapsed", "Commits")
+        table.add_columns("Task ID", "Project", "Health", "Status", "Elapsed")
         table.cursor_type = "row"
         self.update_agents()
-        self.set_interval(5, self.update_agents)
+        self.set_interval(3, self.update_agents)
 
     def update_agents(self) -> None:
-        """Update agent list"""
-        agents = task_store.get_active_agents()
+        """Update agent list with real-time health from tmux monitoring"""
+        # Get real-time agent health from tmux sessions
+        agent_statuses = get_all_agent_statuses()
 
         table = self.query_one("#agents-table", DataTable)
         table.clear()
 
-        for agent in agents:
+        if not agent_statuses:
+            # Fall back to task_store for tasks without active tmux sessions
+            agents = task_store.get_active_agents()
+            for agent in agents:
+                status_icon = {
+                    "running": "🟢",
+                    "blocked": "🟡",
+                    "failed": "🔴",
+                    "paused": "⏸️"
+                }.get(agent['agent_status'], "⚪")
+
+                table.add_row(
+                    agent['task_id'],
+                    agent['project'],
+                    "⚪ NO SESSION",
+                    f"{status_icon} {agent['agent_status'].upper()}",
+                    agent['elapsed']
+                )
+            return
+
+        for agent in agent_statuses:
+            health = agent.get('health', 'unknown')
+            health_icon = HEALTH_ICONS.get(health, "⚪")
+
+            # Task status icon
+            task_status = agent.get('task_agent_status', 'unknown')
             status_icon = {
                 "running": "🟢",
                 "blocked": "🟡",
-                "failed": "🔴"
-            }.get(agent['agent_status'], "⚪")
+                "failed": "🔴",
+                "paused": "⏸️"
+            }.get(task_status, "⚪")
+
+            # Format elapsed time
+            elapsed = agent.get('elapsed', '-')
+
+            # Truncate title
+            title = agent.get('task_title', '-')
+            if len(title) > 25:
+                title = title[:22] + "..."
 
             table.add_row(
                 agent['task_id'],
-                agent['project'],
-                f"{status_icon} {agent['agent_status'].upper()}",
-                agent['phase'],
-                agent['elapsed'],
-                str(agent['commits'])
+                title,
+                f"{health_icon} {health.upper()}",
+                f"{status_icon} {task_status.upper()}",
+                elapsed
             )
 
 
