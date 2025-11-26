@@ -1958,18 +1958,53 @@ class AgentCard(Static):
         super().__init__()
         self.agent_data = agent_data
         self.selected = selected
+        self.task_id = agent_data.get("task_id", "")
 
     def compose(self) -> ComposeResult:
+        yield Static("", id="card-header", classes="agent-card-header")
+
+        # Split container: tmux output (left) and metadata (right)
+        yield Horizontal(
+            Container(
+                Static("", id="card-output", classes="agent-card-output"),
+                classes="agent-card-left"
+            ),
+            Container(
+                Static("", id="card-metadata", classes="agent-card-metadata"),
+                classes="agent-card-right"
+            ),
+            classes="agent-card-content"
+        )
+
+    def on_mount(self) -> None:
+        """Update content after mounting"""
+        self._refresh_content()
+
+    def update_data(self, agent_data: Dict, selected: bool) -> None:
+        """Update the card with new data without remounting"""
+        self.agent_data = agent_data
+        self.selected = selected
+        self._refresh_content()
+        # Update selection styling
+        if selected:
+            self.add_class("agent-card-selected")
+        else:
+            self.remove_class("agent-card-selected")
+
+    def _refresh_content(self) -> None:
+        """Refresh all content in the card"""
         agent = self.agent_data
         health_display = get_health_display(agent["health"])
 
-        # Get multiple lines of recent output
+        # Build header
+        selector = "▶ " if self.selected else "  "
+        header = f"{selector}[bold]{agent['task_id']}[/bold] | {health_display} | {agent.get('task_agent_status', '-')}"
+
+        # Build output text
         recent_lines = agent.get("recent_output", [])
-        # Filter to non-empty lines and get last 10
         non_empty = [line for line in recent_lines if line.strip()][-10:]
         output_text = "\n".join(non_empty) if non_empty else "(no output)"
 
-        # Truncate each line if too long
         output_lines = []
         for line in output_text.split("\n"):
             if len(line) > 80:
@@ -1977,25 +2012,13 @@ class AgentCard(Static):
             output_lines.append(line)
         output_text = "\n".join(output_lines)
 
-        selector = "▶ " if self.selected else "  "
-
-        # Build header with health and status
-        header = f"{selector}[bold]{agent['task_id']}[/bold] | {health_display} | {agent.get('task_agent_status', '-')}"
-
-        yield Static(header, classes="agent-card-header")
-
-        # Split container: tmux output (left) and metadata (right)
-        yield Horizontal(
-            Container(
-                Static(output_text, classes="agent-card-output"),
-                classes="agent-card-left"
-            ),
-            Container(
-                Static(self._build_metadata_text(), classes="agent-card-metadata"),
-                classes="agent-card-right"
-            ),
-            classes="agent-card-content"
-        )
+        # Update widgets
+        try:
+            self.query_one("#card-header", Static).update(header)
+            self.query_one("#card-output", Static).update(output_text)
+            self.query_one("#card-metadata", Static).update(self._build_metadata_text())
+        except Exception:
+            pass  # Widget not yet mounted
 
     def _build_metadata_text(self) -> str:
         """Build the metadata display text for the right panel"""
@@ -2091,6 +2114,7 @@ class AgentsMonitorScreen(Screen):
         yield Footer()
 
     def on_mount(self) -> None:
+        self._card_widgets: Dict[str, AgentCard] = {}
         self.load_agents()
         # Auto-refresh every 2 seconds
         self.set_interval(2, self.load_agents)
@@ -2103,10 +2127,13 @@ class AgentsMonitorScreen(Screen):
         check_and_notify_state_changes(self.agents_data)
 
         container = self.query_one("#agents-cards-container", Container)
-        container.remove_children()
 
         if not self.agents_data:
-            container.mount(Static("[dim]No agents with tmux sessions found[/dim]"))
+            # Only clear if we have cards to remove
+            if self._card_widgets:
+                container.remove_children()
+                self._card_widgets.clear()
+                container.mount(Static("[dim]No agents with tmux sessions found[/dim]"))
             return
 
         # Clamp selected index
@@ -2115,13 +2142,31 @@ class AgentsMonitorScreen(Screen):
         if self.selected_index < 0:
             self.selected_index = 0
 
+        # Build set of current task IDs
+        current_task_ids = {agent["task_id"] for agent in self.agents_data}
+
+        # Remove cards for agents that no longer exist
+        for task_id in list(self._card_widgets.keys()):
+            if task_id not in current_task_ids:
+                self._card_widgets[task_id].remove()
+                del self._card_widgets[task_id]
+
+        # Update existing cards or create new ones
         for i, agent in enumerate(self.agents_data):
+            task_id = agent["task_id"]
             is_selected = (i == self.selected_index)
-            card = AgentCard(agent, selected=is_selected)
-            card.add_class("agent-card")
-            if is_selected:
-                card.add_class("agent-card-selected")
-            container.mount(card)
+
+            if task_id in self._card_widgets:
+                # Update existing card in place
+                self._card_widgets[task_id].update_data(agent, is_selected)
+            else:
+                # Create new card
+                card = AgentCard(agent, selected=is_selected)
+                card.add_class("agent-card")
+                if is_selected:
+                    card.add_class("agent-card-selected")
+                self._card_widgets[task_id] = card
+                container.mount(card)
 
     def action_go_back(self) -> None:
         """Go back to main dashboard"""
