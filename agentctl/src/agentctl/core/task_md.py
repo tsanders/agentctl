@@ -18,6 +18,16 @@ REQUIRED_FIELDS = ['id', 'title', 'project_id']
 VALID_AGENT_STATUS = ['queued', 'running', 'blocked', 'completed', 'failed', 'paused']
 VALID_PRIORITY = ['high', 'medium', 'low']
 VALID_CATEGORY = ['FEATURE', 'BUG', 'REFACTOR', 'DOCS', 'TEST', 'CHORE']
+VALID_PHASE = [
+    'preparation',      # Task writeup in progress
+    'registered',       # Task added to agentctl
+    'agent_created',    # Worktree/branch/tmux session ready
+    'initialization',   # Agent session starting up
+    'implementation',   # Active development with TDD
+    'agent_review',     # Automated code review agent running
+    'human_review',     # Awaiting human review/PR
+    'completed'         # Merged and done
+]
 
 
 def parse_task_file(file_path: Path, strict: bool = False) -> Tuple[Optional[Dict], Optional[str], List[str]]:
@@ -138,6 +148,9 @@ def validate_task_data(data: Dict, strict: bool = False) -> List[str]:
         if 'category' in data and data['category'] not in VALID_CATEGORY:
             errors.append(f"Invalid category: {data['category']}")
 
+        if 'phase' in data and data['phase'] is not None and data['phase'] not in VALID_PHASE:
+            errors.append(f"Invalid phase: {data['phase']}")
+
     return errors
 
 
@@ -196,7 +209,7 @@ def generate_task_template(
         'type': task_type,
         'priority': priority,
         'agent_status': 'queued',
-        'phase': None,
+        'phase': 'preparation',
         'created_at': datetime.now().isoformat(),
         'started_at': None,
         'completed_at': None,
@@ -277,3 +290,45 @@ def update_task_file(file_path: Path, updates: Dict) -> bool:
 
     except Exception:
         return False
+
+
+def get_phase_display_name(phase: Optional[str]) -> str:
+    """Get human-readable display name for a phase"""
+    if not phase:
+        return "Not Set"
+
+    phase_names = {
+        'preparation': 'Preparation',
+        'registered': 'Registered',
+        'agent_created': 'Agent Created',
+        'initialization': 'Initialization',
+        'implementation': 'Implementation',
+        'agent_review': 'Agent Review',
+        'human_review': 'Human Review',
+        'completed': 'Completed'
+    }
+    return phase_names.get(phase, phase.title())
+
+
+def get_next_phase(current_phase: Optional[str]) -> Optional[str]:
+    """Get the next phase in the workflow"""
+    if not current_phase or current_phase not in VALID_PHASE:
+        return VALID_PHASE[0]  # Start at preparation
+
+    current_index = VALID_PHASE.index(current_phase)
+    if current_index < len(VALID_PHASE) - 1:
+        return VALID_PHASE[current_index + 1]
+
+    return None  # Already at final phase
+
+
+def get_previous_phase(current_phase: Optional[str]) -> Optional[str]:
+    """Get the previous phase in the workflow"""
+    if not current_phase or current_phase not in VALID_PHASE:
+        return None
+
+    current_index = VALID_PHASE.index(current_phase)
+    if current_index > 0:
+        return VALID_PHASE[current_index - 1]
+
+    return None  # Already at first phase

@@ -1520,6 +1520,8 @@ class TaskDetailScreen(Screen):
         ("1", "cycle_status", "Cycle Status"),
         ("2", "cycle_priority", "Cycle Priority"),
         ("3", "cycle_category", "Cycle Category"),
+        ("4", "advance_phase", "Next Phase"),
+        ("5", "regress_phase", "Prev Phase"),
         ("c", "complete_task", "Complete"),
         ("d", "delete_task", "Delete"),
         ("j", "scroll_down", "Down"),
@@ -1631,6 +1633,10 @@ class TaskDetailScreen(Screen):
         else:
             markdown_body = "(no content)"
 
+        # Build workflow progress display
+        current_phase = self.task_data.get('phase')
+        workflow_display = self._build_workflow_progress(current_phase)
+
         container.mount(
             Static(f"📋 {self.task_id}", classes="screen-title"),
             # Compact single-section layout
@@ -1638,14 +1644,35 @@ class TaskDetailScreen(Screen):
             Static(f"Project: {self.task_data.get('project_name', '-')} | Repo: {self.task_data.get('repository_name') or '-'}", classes="detail-row"),
             Static(f"[1] Status: {self._format_status(self.task_data['agent_status'])}", classes="detail-row"),
             Static(f"[2] Priority: {self.task_data['priority'].upper()} | [3] Category: {self.task_data['category']}", classes="detail-row"),
-            Static(f"Type: {self.task_data['type']} | Phase: {self.task_data.get('phase') or '-'}", classes="detail-row"),
+            Static(f"Type: {self.task_data['type']}", classes="detail-row"),
             Static(agent_status_line, classes="detail-row"),
             Static(f"Branch: {self.task_data.get('git_branch') or '-'} | tmux: {tmux_session or '-'}", classes="detail-row"),
             Static(f"[n] Notes: {self.task_data.get('notes') or '(none - press n to add)'}", classes="detail-row"),
             Static("─" * 60, classes="detail-row"),
+            Static("[bold]Workflow Progress ([4] next / [5] prev):[/bold]", classes="detail-row"),
+            Static(workflow_display, classes="detail-row"),
+            Static("─" * 60, classes="detail-row"),
             Static("[bold]Task Content:[/bold]", classes="detail-row"),
             Static(markdown_body, classes="task-markdown-content"),
         )
+
+    def _build_workflow_progress(self, current_phase: Optional[str]) -> str:
+        """Build workflow progress display string"""
+        lines = []
+        for phase in task_md.VALID_PHASE:
+            display_name = task_md.get_phase_display_name(phase)
+
+            if phase == current_phase:
+                # Current phase
+                lines.append(f"▶ [bold green]{display_name}[/bold green] [current]")
+            elif not current_phase or task_md.VALID_PHASE.index(phase) < task_md.VALID_PHASE.index(current_phase):
+                # Completed phase
+                lines.append(f"✓ [dim]{display_name}[/dim]")
+            else:
+                # Future phase
+                lines.append(f"○ [dim]{display_name}[/dim]")
+
+        return "\n".join(lines)
 
     def _format_status(self, status: str) -> str:
         """Format status with icon"""
@@ -1809,6 +1836,32 @@ class TaskDetailScreen(Screen):
         next_category = categories[(current_idx + 1) % len(categories)]
 
         self._update_field('category', next_category)
+
+    def action_advance_phase(self) -> None:
+        """Advance to next phase in workflow"""
+        current_phase = self.task_data.get('phase')
+        next_phase = task_md.get_next_phase(current_phase)
+
+        if not next_phase:
+            self.app.notify("Already at final phase", severity="warning")
+            return
+
+        self._update_field('phase', next_phase)
+        display_name = task_md.get_phase_display_name(next_phase)
+        self.app.notify(f"Advanced to: {display_name}", severity="success")
+
+    def action_regress_phase(self) -> None:
+        """Go back to previous phase in workflow"""
+        current_phase = self.task_data.get('phase')
+        prev_phase = task_md.get_previous_phase(current_phase)
+
+        if not prev_phase:
+            self.app.notify("Already at first phase", severity="warning")
+            return
+
+        self._update_field('phase', prev_phase)
+        display_name = task_md.get_phase_display_name(prev_phase)
+        self.app.notify(f"Regressed to: {display_name}", severity="success")
 
     def _update_field(self, field: str, value: str) -> None:
         """Update a single field in the task"""
