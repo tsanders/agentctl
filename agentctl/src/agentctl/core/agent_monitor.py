@@ -169,13 +169,14 @@ def get_session_logs_dir() -> 'Path':
     return logs_dir
 
 
-def save_session_log(task_id: str, session_name: str, append_timestamp: bool = True) -> Optional[str]:
+def save_session_log(task_id: str, session_name: str, append_timestamp: bool = True, parse_analytics: bool = True) -> Optional[str]:
     """Capture and save a tmux session to a log file.
 
     Args:
         task_id: Task ID for the filename
         session_name: tmux session name to capture
         append_timestamp: If True, append timestamp to filename
+        parse_analytics: If True, parse log and save analytics to database
 
     Returns:
         Path to the saved file, or None if capture failed
@@ -203,6 +204,18 @@ def save_session_log(task_id: str, session_name: str, append_timestamp: bool = T
             f.write(f"# Captured at: {datetime.now().isoformat()}\n")
             f.write("#" + "=" * 60 + "\n\n")
             f.write(content)
+
+        # Parse and save analytics
+        if parse_analytics:
+            try:
+                from .session_parser import parse_session_log
+                from . import database
+
+                metrics = parse_session_log(content, task_id)
+                database.save_session_analytics(task_id, session_name, str(filepath), metrics)
+            except Exception:
+                pass  # Analytics are optional, don't fail if parsing fails
+
         return str(filepath)
     except Exception:
         return None

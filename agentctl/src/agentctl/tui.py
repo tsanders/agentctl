@@ -2122,6 +2122,268 @@ class AgentsMonitorScreen(Screen):
             self.app.notify("Failed to capture session", severity="error")
 
 
+class UserPromptsScreen(Screen):
+    """Screen for browsing user prompts from sessions"""
+
+    BINDINGS = [
+        ("escape", "go_back", "Back"),
+        ("j", "cursor_down", "Down"),
+        ("k", "cursor_up", "Up"),
+        ("enter", "view_prompt", "View"),
+        ("q", "quit", "Quit"),
+    ]
+
+    def __init__(self, task_id: Optional[str] = None):
+        super().__init__()
+        self.task_id = task_id
+        self.prompts_data: List[Dict] = []
+        self.selected_index = 0
+
+    def compose(self) -> ComposeResult:
+        title = f"💬 USER PROMPTS - {self.task_id}" if self.task_id else "💬 USER PROMPTS (All Tasks)"
+        yield Header()
+        yield Container(
+            Static(title, classes="screen-title"),
+            Horizontal(
+                Container(
+                    DataTable(id="prompts-table"),
+                    id="prompts-list-container"
+                ),
+                Container(
+                    Static("[bold]Prompt Detail[/bold]", id="prompt-detail-title"),
+                    ScrollableContainer(
+                        Static("Select a prompt to view details", id="prompt-detail-content"),
+                        id="prompt-detail-scroll"
+                    ),
+                    id="prompt-detail-container"
+                ),
+                id="prompts-split-view"
+            ),
+            id="prompts-screen-container"
+        )
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.load_prompts()
+
+    def load_prompts(self) -> None:
+        """Load prompts from database"""
+        self.prompts_data = database.get_user_prompts(task_id=self.task_id, limit=100)
+
+        table = self.query_one("#prompts-table", DataTable)
+        table.clear()
+
+        if len(table.columns) == 0:
+            table.add_columns("Type", "Task", "Prompt")
+            table.cursor_type = "row"
+
+        for prompt in self.prompts_data:
+            type_icon = {
+                'message': '💬',
+                'command': '⚡',
+                'file_reference': '📄',
+                'interrupt': '⏹️'
+            }.get(prompt['prompt_type'], '•')
+
+            # Truncate for table display
+            prompt_preview = prompt['prompt'][:50] + "..." if len(prompt['prompt']) > 50 else prompt['prompt']
+
+            table.add_row(
+                f"{type_icon} {prompt['prompt_type'][:7]}",
+                prompt['task_id'][:12],
+                prompt_preview
+            )
+
+        # Show first prompt detail
+        if self.prompts_data:
+            self._show_prompt_detail(0)
+
+    def _show_prompt_detail(self, index: int) -> None:
+        """Show full prompt detail"""
+        if not self.prompts_data or index >= len(self.prompts_data):
+            return
+
+        prompt = self.prompts_data[index]
+        detail = self.query_one("#prompt-detail-content", Static)
+
+        type_icon = {
+            'message': '💬 Message',
+            'command': '⚡ Command',
+            'file_reference': '📄 File Reference',
+            'interrupt': '⏹️ Interrupt'
+        }.get(prompt['prompt_type'], prompt['prompt_type'])
+
+        detail_text = f"""[bold cyan]Type:[/bold cyan] {type_icon}
+[bold cyan]Task:[/bold cyan] {prompt['task_id']}
+[bold cyan]Order:[/bold cyan] #{prompt['prompt_order']}
+
+[bold cyan]Full Prompt:[/bold cyan]
+{prompt['prompt']}
+"""
+        detail.update(detail_text)
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        """Update detail when cursor moves"""
+        if event.data_table.id == "prompts-table" and event.cursor_row is not None:
+            self._show_prompt_detail(event.cursor_row)
+            self.selected_index = event.cursor_row
+
+    def action_cursor_down(self) -> None:
+        """Move cursor down"""
+        table = self.query_one("#prompts-table", DataTable)
+        table.action_cursor_down()
+
+    def action_cursor_up(self) -> None:
+        """Move cursor up"""
+        table = self.query_one("#prompts-table", DataTable)
+        table.action_cursor_up()
+
+    def action_go_back(self) -> None:
+        """Go back"""
+        self.app.pop_screen()
+
+    def action_view_prompt(self) -> None:
+        """View full prompt (already shown in detail pane)"""
+        pass  # Detail is already shown
+
+
+class AnalyticsScreen(Screen):
+    """Screen showing session analytics and metrics"""
+
+    BINDINGS = [
+        ("escape", "go_back", "Back"),
+        ("r", "refresh", "Refresh"),
+        ("p", "view_prompts", "Prompts"),
+        ("j", "scroll_down", "Down"),
+        ("k", "scroll_up", "Up"),
+        ("q", "quit", "Quit"),
+    ]
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield ScrollableContainer(
+            Static("📊 SESSION ANALYTICS", classes="screen-title"),
+            Container(id="analytics-content"),
+            id="analytics-scroll"
+        )
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.load_analytics()
+
+    def action_scroll_down(self) -> None:
+        """Scroll down (vim j)"""
+        scroll = self.query_one("#analytics-scroll", ScrollableContainer)
+        scroll.scroll_down()
+
+    def action_scroll_up(self) -> None:
+        """Scroll up (vim k)"""
+        scroll = self.query_one("#analytics-scroll", ScrollableContainer)
+        scroll.scroll_up()
+
+    def load_analytics(self) -> None:
+        """Load and display analytics data"""
+        container = self.query_one("#analytics-content", Container)
+        container.remove_children()
+
+        # Get analytics summary
+        summary = database.get_analytics_summary()
+
+        if summary['total_sessions'] == 0:
+            container.mount(
+                Static("[dim]No session data yet. Use 'l' in Agents view to capture sessions.[/dim]")
+            )
+            return
+
+        # Summary section
+        summary_text = f"""[bold cyan]Overall Summary[/bold cyan]
+Sessions Captured: {summary['total_sessions']}
+Total Tool Calls: {summary['total_tool_calls']}
+Total File Operations: {summary['total_file_operations']}
+Total Commands: {summary['total_commands']}
+Total Errors: {summary['total_errors']}
+"""
+        container.mount(Static(summary_text, classes="analytics-section"))
+
+        # Top tools section
+        if summary['top_tools']:
+            tools_lines = ["[bold cyan]Top Tools Used[/bold cyan]"]
+            for tool in summary['top_tools']:
+                bar_len = min(int(tool['total'] / 5), 30)  # Scale bar
+                bar = "█" * bar_len
+                tools_lines.append(f"  {tool['tool_name']}: {tool['total']} {bar}")
+            container.mount(Static("\n".join(tools_lines), classes="analytics-section"))
+
+        # Get detailed tool stats
+        tool_stats = database.get_tool_usage_stats()
+        if tool_stats:
+            detailed_lines = ["[bold cyan]All Tool Usage[/bold cyan]"]
+            for stat in tool_stats[:15]:  # Top 15
+                detailed_lines.append(f"  {stat['tool_name']}: {stat['total_calls']}")
+            container.mount(Static("\n".join(detailed_lines), classes="analytics-section"))
+
+        # File activity
+        file_stats = database.get_file_activity_stats(limit=10)
+        if file_stats:
+            file_lines = ["[bold cyan]Most Accessed Files[/bold cyan]"]
+            for stat in file_stats:
+                # Truncate long paths
+                path = stat['file_path']
+                if len(path) > 50:
+                    path = "..." + path[-47:]
+                ops = f"R:{stat['reads']} W:{stat['writes']} E:{stat['edits']}"
+                file_lines.append(f"  {path}")
+                file_lines.append(f"    {ops} (total: {stat['total_operations']})")
+            container.mount(Static("\n".join(file_lines), classes="analytics-section"))
+
+        # Error stats
+        error_stats = database.get_error_stats()
+        if error_stats:
+            error_lines = ["[bold cyan]Errors by Type[/bold cyan]"]
+            for stat in error_stats:
+                error_lines.append(f"  {stat['error_type']}: {stat['count']}")
+            container.mount(Static("\n".join(error_lines), classes="analytics-section"))
+
+        # Recent errors
+        if summary['recent_errors']:
+            recent_lines = ["[bold red]Recent Errors[/bold red]"]
+            for err in summary['recent_errors']:
+                msg = err['error_message'][:60] + "..." if len(err['error_message']) > 60 else err['error_message']
+                recent_lines.append(f"  [{err['task_id']}] {err['error_type']}: {msg}")
+            container.mount(Static("\n".join(recent_lines), classes="analytics-section"))
+
+        # User prompts section
+        if summary.get('total_user_prompts', 0) > 0:
+            prompts_summary = f"""[bold cyan]User Prompts[/bold cyan]
+Total Prompts: {summary['total_user_prompts']}
+  Messages: {summary.get('prompt_messages', 0)}
+  Commands: {summary.get('prompt_commands', 0)}
+  File Refs: {summary.get('prompt_file_refs', 0)}
+"""
+            container.mount(Static(prompts_summary, classes="analytics-section"))
+
+            # Recent prompts
+            if summary.get('recent_prompts'):
+                prompt_lines = ["[bold cyan]Recent User Messages[/bold cyan]"]
+                for p in summary['recent_prompts']:
+                    prompt_text = p['prompt'][:70] + "..." if len(p['prompt']) > 70 else p['prompt']
+                    prompt_lines.append(f"  [{p['task_id']}] {prompt_text}")
+                container.mount(Static("\n".join(prompt_lines), classes="analytics-section"))
+
+    def action_go_back(self) -> None:
+        """Go back to main dashboard"""
+        self.app.pop_screen()
+
+    def action_refresh(self) -> None:
+        """Refresh analytics data"""
+        self.load_analytics()
+        self.app.notify("Analytics refreshed", severity="information")
+
+    def action_view_prompts(self) -> None:
+        """Open user prompts browser"""
+        self.app.push_screen(UserPromptsScreen())
+
+
 class AgentDashboard(App):
     """Main TUI dashboard application for agentctl"""
 
@@ -2291,6 +2553,62 @@ class AgentDashboard(App):
         padding: 0;
         margin-left: 2;
     }
+
+    /* Analytics screen styles */
+    #analytics-scroll {
+        height: 100%;
+        overflow-y: auto;
+    }
+
+    #analytics-content {
+        height: auto;
+        padding: 0 1;
+    }
+
+    .analytics-section {
+        margin: 1 0;
+        padding: 0;
+    }
+
+    /* User prompts screen styles */
+    #prompts-screen-container {
+        height: 100%;
+    }
+
+    #prompts-split-view {
+        height: 1fr;
+    }
+
+    #prompts-list-container {
+        width: 1fr;
+        height: 100%;
+        border: solid $accent;
+    }
+
+    #prompts-table {
+        height: 100%;
+    }
+
+    #prompt-detail-container {
+        width: 1fr;
+        height: 100%;
+        border: solid $accent;
+        padding: 0 1;
+    }
+
+    #prompt-detail-scroll {
+        height: 1fr;
+    }
+
+    #prompt-detail-content {
+        padding: 1;
+    }
+
+    #prompt-detail-title {
+        text-style: bold;
+        background: $boost;
+        padding: 0 1;
+    }
     """
 
     BINDINGS = [
@@ -2300,6 +2618,7 @@ class AgentDashboard(App):
         ("p", "manage_projects", "Projects"),
         ("t", "manage_tasks", "Tasks"),
         ("a", "monitor_agents", "Agents"),
+        ("y", "view_analytics", "Analytics"),
     ]
 
     def compose(self) -> ComposeResult:
@@ -2339,6 +2658,10 @@ class AgentDashboard(App):
     def action_monitor_agents(self) -> None:
         """Open agents monitor screen"""
         self.push_screen(AgentsMonitorScreen())
+
+    def action_view_analytics(self) -> None:
+        """Open analytics screen"""
+        self.push_screen(AnalyticsScreen())
 
 
 def run_dashboard():
