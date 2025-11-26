@@ -10,7 +10,7 @@ from typing import Dict, List, Optional
 
 import libtmux
 
-from .database import list_all_tasks
+from .task_store import list_all_tasks
 from .tmux import get_server, session_exists
 
 # Health state constants
