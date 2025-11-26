@@ -1850,6 +1850,7 @@ class AgentsMonitorScreen(Screen):
         ("escape", "go_back", "Back"),
         ("enter", "view_task", "View Task"),
         ("a", "attach_tmux", "Attach tmux"),
+        ("g", "open_ghostty", "Ghostty"),
         ("r", "refresh", "Refresh"),
         ("j", "cursor_down", "Down"),
         ("k", "cursor_up", "Up"),
@@ -1964,6 +1965,47 @@ class AgentsMonitorScreen(Screen):
             # Not in tmux, use regular attach
             with self.app.suspend():
                 subprocess.run(["tmux", "attach", "-t", tmux_session])
+
+    def action_open_ghostty(self) -> None:
+        """Open selected agent's tmux session in a new Ghostty window"""
+        import subprocess
+        from agentctl.core.tmux import session_exists
+
+        if not self.agents_data:
+            self.app.notify("No agent selected", severity="warning")
+            return
+
+        agent = self.agents_data[self.selected_index]
+        task_id = agent["task_id"]
+        tmux_session = agent.get("tmux_session")
+
+        if not tmux_session:
+            # Try getting from task data
+            task = task_store.get_task(task_id)
+            if task:
+                tmux_session = task.get("tmux_session")
+
+        if not tmux_session:
+            self.app.notify("Task has no tmux session", severity="warning")
+            return
+
+        if not session_exists(tmux_session):
+            self.app.notify(f"Session '{tmux_session}' not found", severity="error")
+            return
+
+        try:
+            # Open new Ghostty window with tmux attach command
+            subprocess.Popen(
+                ["ghostty", "-e", "tmux", "attach", "-t", tmux_session],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True
+            )
+            self.app.notify(f"Opened {tmux_session} in Ghostty", severity="success")
+        except FileNotFoundError:
+            self.app.notify("Ghostty not found. Install from ghostty.org", severity="error")
+        except Exception as e:
+            self.app.notify(f"Failed to open Ghostty: {e}", severity="error")
 
 
 class AgentDashboard(App):
