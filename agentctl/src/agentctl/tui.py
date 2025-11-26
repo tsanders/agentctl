@@ -1972,21 +1972,92 @@ class AgentCard(Static):
         # Truncate each line if too long
         output_lines = []
         for line in output_text.split("\n"):
-            if len(line) > 100:
-                line = line[:97] + "..."
+            if len(line) > 80:
+                line = line[:77] + "..."
             output_lines.append(line)
         output_text = "\n".join(output_lines)
 
         selector = "▶ " if self.selected else "  "
 
-        # Build header with optional notes
+        # Build header with health and status
         header = f"{selector}[bold]{agent['task_id']}[/bold] | {health_display} | {agent.get('task_agent_status', '-')}"
-        notes = agent.get("notes", "")
-        if notes:
-            header += f" | 📝 {notes[:40]}"
 
         yield Static(header, classes="agent-card-header")
-        yield Static(output_text, classes="agent-card-output")
+
+        # Split container: tmux output (left) and metadata (right)
+        yield Horizontal(
+            Container(
+                Static(output_text, classes="agent-card-output"),
+                classes="agent-card-left"
+            ),
+            Container(
+                Static(self._build_metadata_text(), classes="agent-card-metadata"),
+                classes="agent-card-right"
+            ),
+            classes="agent-card-content"
+        )
+
+    def _build_metadata_text(self) -> str:
+        """Build the metadata display text for the right panel"""
+        agent = self.agent_data
+        task_id = agent.get("task_id", "")
+
+        # Get full task data for additional metadata
+        task = task_store.get_task(task_id) if task_id else {}
+        if not task:
+            task = {}
+
+        lines = []
+
+        # Title (truncated)
+        title = agent.get("task_title") or task.get("title", "-")
+        if len(title) > 30:
+            title = title[:27] + "..."
+        lines.append(f"[bold]Title:[/bold] {title}")
+
+        # Project
+        project = agent.get("project") or task.get("project_name", "-")
+        lines.append(f"[bold]Project:[/bold] {project}")
+
+        # Category and Type
+        category = task.get("category", "-")
+        task_type = task.get("type", "-")
+        lines.append(f"[bold]Category:[/bold] {category}")
+        lines.append(f"[bold]Type:[/bold] {task_type}")
+
+        # Priority
+        priority = task.get("priority", "-")
+        priority_icon = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(priority, "")
+        lines.append(f"[bold]Priority:[/bold] {priority_icon} {priority}")
+
+        # Git Branch
+        branch = task.get("git_branch") or "-"
+        if len(branch) > 25:
+            branch = branch[:22] + "..."
+        lines.append(f"[bold]Branch:[/bold] {branch}")
+
+        # Assignee
+        assignee = task.get("assignee", "-")
+        lines.append(f"[bold]Assignee:[/bold] {assignee}")
+
+        # Due date
+        due = task.get("due")
+        if due:
+            lines.append(f"[bold]Due:[/bold] {due}")
+
+        # Notes (if any)
+        notes = agent.get("notes") or task.get("notes", "")
+        if notes:
+            if len(notes) > 30:
+                notes = notes[:27] + "..."
+            lines.append(f"[bold]Notes:[/bold] 📝 {notes}")
+
+        # Elapsed time
+        elapsed = agent.get("elapsed", "-")
+        if elapsed and elapsed != "-":
+            lines.append(f"[bold]Elapsed:[/bold] {elapsed}")
+
+        return "\n".join(lines)
 
 
 class AgentsMonitorScreen(Screen):
@@ -2634,6 +2705,7 @@ class AgentDashboard(App):
         margin: 1 0;
         padding: 0 1;
         height: auto;
+        max-height: 14;
     }
 
     .agent-card-selected {
@@ -2644,12 +2716,35 @@ class AgentDashboard(App):
     .agent-card-header {
         text-style: bold;
         padding: 0;
+        height: 1;
+    }
+
+    .agent-card-content {
+        height: auto;
+        max-height: 11;
+    }
+
+    .agent-card-left {
+        width: 1fr;
+        height: auto;
+    }
+
+    .agent-card-right {
+        width: 35;
+        height: auto;
+        padding-left: 1;
+        border-left: solid $primary-darken-2;
     }
 
     .agent-card-output {
         color: $text-muted;
-        padding: 0;
+        height: auto;
         margin-left: 2;
+    }
+
+    .agent-card-metadata {
+        color: $text;
+        height: auto;
     }
 
     /* Analytics screen styles */
