@@ -2942,7 +2942,13 @@ class AgentDashboard(App):
             pass
 
 
-def run_dashboard():
-    """Run the dashboard application"""
+def run_dashboard(open_agents: bool = False):
+    """Run the dashboard application
+
+    Args:
+        open_agents: If True, open directly to agents monitor screen
+    """
     app = AgentDashboard()
+    if open_agents:
+        app.push_screen(AgentsMonitorScreen())
     app.run()

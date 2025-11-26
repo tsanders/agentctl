@@ -50,10 +50,12 @@ def init():
 
 
 @app.command()
-def dash():
+def dash(
+    agents: bool = typer.Option(False, "--agents", "-a", help="Open directly to agents monitor screen")
+):
     """Launch interactive TUI dashboard"""
     from agentctl.tui import run_dashboard
-    run_dashboard()
+    run_dashboard(open_agents=agents)
 
 
 @app.command()
