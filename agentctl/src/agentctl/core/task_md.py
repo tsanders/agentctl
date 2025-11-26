@@ -1,4 +1,8 @@
-"""Markdown task file operations for agentctl"""
+"""Markdown task file operations for agentctl
+
+Markdown files are the single source of truth for task data.
+All frontmatter fields are preserved - only minimal fields are required.
+"""
 
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -7,23 +11,22 @@ import frontmatter
 import re
 
 
-# Required fields for task frontmatter
-REQUIRED_FIELDS = [
-    'id', 'title', 'project_id', 'category', 'agent_status', 'priority', 'created_at'
-]
+# Minimal required fields - just enough to identify and display a task
+REQUIRED_FIELDS = ['id', 'title', 'project_id']
 
-# Valid enum values
-VALID_AGENT_STATUS = ['queued', 'running', 'blocked', 'completed', 'failed']
+# Valid enum values for agentctl-specific fields
+VALID_AGENT_STATUS = ['queued', 'running', 'blocked', 'completed', 'failed', 'paused']
 VALID_PRIORITY = ['high', 'medium', 'low']
 VALID_CATEGORY = ['FEATURE', 'BUG', 'REFACTOR', 'DOCS', 'TEST', 'CHORE']
 
 
-def parse_task_file(file_path: Path) -> Tuple[Optional[Dict], Optional[str], List[str]]:
+def parse_task_file(file_path: Path, strict: bool = False) -> Tuple[Optional[Dict], Optional[str], List[str]]:
     """
-    Parse a task markdown file
+    Parse a task markdown file, preserving ALL frontmatter fields.
 
     Args:
         file_path: Path to the markdown file
+        strict: If True, validate agentctl-specific fields. If False, only check required fields.
 
     Returns:
         Tuple of (task_data dict, markdown body, list of errors)
@@ -39,9 +42,13 @@ def parse_task_file(file_path: Path) -> Tuple[Optional[Dict], Optional[str], Lis
         body = post.content
 
         # Validate task data
-        validation_errors = validate_task_data(task_data)
+        validation_errors = validate_task_data(task_data, strict=strict)
         if validation_errors:
             return None, None, validation_errors
+
+        # Normalize: ensure agent_status exists (derive from other fields if needed)
+        if 'agent_status' not in task_data:
+            task_data['agent_status'] = _derive_agent_status(task_data)
 
         return task_data, body, []
 
@@ -51,64 +58,85 @@ def parse_task_file(file_path: Path) -> Tuple[Optional[Dict], Optional[str], Lis
         return None, None, [f"Error parsing file: {str(e)}"]
 
 
-def validate_task_data(data: Dict) -> List[str]:
+def _derive_agent_status(data: Dict) -> str:
     """
-    Validate task frontmatter data
+    Derive agent_status from other fields if not present.
+
+    Looks at 'status' field or other indicators to determine agent state.
+    """
+    # Check for explicit status field (Obsidian compatibility)
+    status = data.get('status', '').lower()
+    if status:
+        # Map common status values to agent_status
+        status_map = {
+            'in-progress': 'running',
+            'in progress': 'running',
+            'active': 'running',
+            'working': 'running',
+            'done': 'completed',
+            'complete': 'completed',
+            'finished': 'completed',
+            'todo': 'queued',
+            'pending': 'queued',
+            'waiting': 'blocked',
+            'blocked': 'blocked',
+            'on-hold': 'blocked',
+            'failed': 'failed',
+            'error': 'failed',
+        }
+        if status in status_map:
+            return status_map[status]
+
+    # Check if task has been started
+    if data.get('started_at') and not data.get('completed_at'):
+        return 'running'
+    if data.get('completed_at'):
+        return 'completed'
+
+    return 'queued'
+
+
+def validate_task_data(data: Dict, strict: bool = False) -> List[str]:
+    """
+    Validate task frontmatter data.
+
+    Only validates minimal required fields by default.
+    All other fields are preserved as-is.
 
     Args:
         data: Task data dictionary
+        strict: If True, also validate agentctl-specific fields
 
     Returns:
         List of error messages (empty if valid)
     """
     errors = []
 
-    # Check required fields
+    # Check required fields only
     for field in REQUIRED_FIELDS:
         if field not in data or data[field] is None:
             errors.append(f"Missing required field: {field}")
 
-    if errors:  # Don't validate further if required fields are missing
+    if errors:
         return errors
 
-    # Validate id format
-    if not re.match(r'^[A-Z]+-[A-Z]+-\d{4}$', str(data['id'])):
-        errors.append(f"Invalid id format: {data['id']} (expected PROJECT-CATEGORY-NNNN)")
+    # Validate id format (flexible - allow various patterns)
+    task_id = str(data['id'])
+    if not re.match(r'^[A-Z]+-[A-Z0-9]+-\d+$', task_id):
+        # Try looser pattern
+        if not re.match(r'^[\w-]+$', task_id):
+            errors.append(f"Invalid id format: {data['id']}")
 
-    # Validate agent_status
-    if data['agent_status'] not in VALID_AGENT_STATUS:
-        errors.append(f"Invalid agent_status: {data['agent_status']} (must be one of: {', '.join(VALID_AGENT_STATUS)})")
+    if strict:
+        # Strict mode: validate agentctl-specific fields
+        if 'agent_status' in data and data['agent_status'] not in VALID_AGENT_STATUS:
+            errors.append(f"Invalid agent_status: {data['agent_status']}")
 
-    # Validate priority
-    if data['priority'] not in VALID_PRIORITY:
-        errors.append(f"Invalid priority: {data['priority']} (must be one of: {', '.join(VALID_PRIORITY)})")
+        if 'priority' in data and data['priority'] not in VALID_PRIORITY:
+            errors.append(f"Invalid priority: {data['priority']}")
 
-    # Validate category
-    if data['category'] not in VALID_CATEGORY:
-        errors.append(f"Invalid category: {data['category']} (must be one of: {', '.join(VALID_CATEGORY)})")
-
-    # Validate created_at is a valid ISO 8601 timestamp
-    try:
-        datetime.fromisoformat(str(data['created_at']))
-    except (ValueError, TypeError):
-        errors.append(f"Invalid created_at timestamp: {data['created_at']} (must be ISO 8601 format)")
-
-    # Validate optional timestamp fields
-    for field in ['started_at', 'completed_at']:
-        if field in data and data[field] is not None:
-            try:
-                datetime.fromisoformat(str(data[field]))
-            except (ValueError, TypeError):
-                errors.append(f"Invalid {field} timestamp: {data[field]} (must be ISO 8601 format)")
-
-    # Validate commits is a non-negative integer
-    if 'commits' in data:
-        try:
-            commits = int(data['commits'])
-            if commits < 0:
-                errors.append(f"commits must be >= 0, got: {commits}")
-        except (ValueError, TypeError):
-            errors.append(f"commits must be an integer, got: {data['commits']}")
+        if 'category' in data and data['category'] not in VALID_CATEGORY:
+            errors.append(f"Invalid category: {data['category']}")
 
     return errors
 

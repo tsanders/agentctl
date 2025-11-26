@@ -1,4 +1,7 @@
-"""Task management for agentctl"""
+"""Task management for agentctl
+
+Tasks are stored as markdown files - no SQLite database for task data.
+"""
 
 from pathlib import Path
 from typing import Optional, Dict
@@ -6,7 +9,8 @@ from datetime import datetime
 
 import shutil
 
-from agentctl.core import database, task_md, task_sync
+from agentctl.core import database, task_md
+from agentctl.core import task_store
 from agentctl.core.tmux import create_session, session_exists
 from agentctl.core.git import create_branch, get_current_branch
 
@@ -14,37 +18,30 @@ from agentctl.core.git import create_branch, get_current_branch
 class Task:
     def __init__(self, task_id: str):
         self.task_id = task_id
-        self.load_from_db()
+        self.load_from_markdown()
 
-    def load_from_db(self):
-        """Load task details from database"""
-        task_data = database.get_task(self.task_id)
+    def load_from_markdown(self):
+        """Load task details from markdown file"""
+        task_data = task_store.get_task(self.task_id)
 
         if not task_data:
             raise ValueError(f"Task {self.task_id} not found")
 
         self.project_id = task_data['project_id']
         self.repository_id = task_data.get('repository_id')
-        self.category = task_data['category']
+        self.category = task_data.get('category', 'FEATURE')
         self.title = task_data['title']
-        self.agent_status = task_data['agent_status']
-        self.priority = task_data['priority']
+        self.agent_status = task_data.get('agent_status', 'queued')
+        self.priority = task_data.get('priority', 'medium')
         self.phase = task_data.get('phase')
 
-        # Load project and repository details
-        project_data = database.get_project(self.project_id)
-        self.project_name = project_data['name'] if project_data else self.project_id
+        # Project and repository info from task_store
+        self.project_name = task_data.get('project_name', self.project_id)
 
         if self.repository_id:
-            repo_data = database.get_repository(self.repository_id)
-            if repo_data:
-                self.repository_path = Path(repo_data['path'])
-                self.repository_name = repo_data['name']
-                self.default_branch = repo_data.get('default_branch', 'main')
-            else:
-                self.repository_path = None
-                self.repository_name = None
-                self.default_branch = 'main'
+            self.repository_path = Path(task_data['repository_path']) if task_data.get('repository_path') else None
+            self.repository_name = task_data.get('repository_name')
+            self.default_branch = task_data.get('default_branch', 'main')
         else:
             self.repository_path = None
             self.repository_name = None
@@ -90,62 +87,13 @@ def copy_task_file_to_workdir(task_id: str, work_dir: Path) -> Optional[Path]:
     Returns:
         Path to the created TASK.md, or None if source not found
     """
-    task_data = database.get_task(task_id)
-    if not task_data:
+    file_path = task_store.get_task_file_path(task_id)
+    if not file_path or not file_path.exists():
         return None
 
     dest_path = work_dir / "TASK.md"
-
-    if task_data.get('source') == 'markdown':
-        # Copy from markdown source file
-        project = database.get_project(task_data['project_id'])
-        if not project or not project.get('tasks_path'):
-            return None
-
-        source_path = Path(project['tasks_path']) / f"{task_id}.md"
-        if not source_path.exists():
-            return None
-
-        shutil.copy2(source_path, dest_path)
-    else:
-        # Generate markdown from database fields
-        content = _generate_task_markdown(task_data)
-        dest_path.write_text(content, encoding='utf-8')
-
+    shutil.copy2(file_path, dest_path)
     return dest_path
-
-
-def _generate_task_markdown(task_data: Dict) -> str:
-    """Generate markdown content from database task data."""
-    import frontmatter
-
-    # Build frontmatter data
-    fm_data = {
-        'id': task_data.get('id'),
-        'title': task_data.get('title'),
-        'project_id': task_data.get('project_id'),
-        'repository_id': task_data.get('repository_id'),
-        'category': task_data.get('category'),
-        'type': task_data.get('type'),
-        'priority': task_data.get('priority'),
-        'agent_status': task_data.get('agent_status'),
-        'phase': task_data.get('phase'),
-        'created_at': task_data.get('created_at'),
-        'started_at': task_data.get('started_at'),
-        'completed_at': task_data.get('completed_at'),
-        'git_branch': task_data.get('git_branch'),
-        'tmux_session': task_data.get('tmux_session'),
-        'agent_type': task_data.get('agent_type'),
-        'commits': task_data.get('commits', 0),
-    }
-
-    # Build body
-    title = task_data.get('title', 'Untitled Task')
-    description = task_data.get('description', '')
-    body = f"# {title}\n\n{description}"
-
-    post = frontmatter.Post(body, **fm_data)
-    return frontmatter.dumps(post)
 
 
 def start_task(task_id: str, agent_type: Optional[str] = None, working_dir: Optional[Path] = None) -> Task:
@@ -171,30 +119,16 @@ def start_task(task_id: str, agent_type: Optional[str] = None, working_dir: Opti
     except Exception as e:
         raise RuntimeError(f"Failed to create tmux session: {e}")
 
-    # Update task agent_status (check if markdown or database)
-    task_data = database.get_task(task_id)
-    if task_data and task_data.get('source') == 'markdown':
-        # Update markdown task
-        updates = {
-            'agent_status': 'running',
-            'phase': 'planning',
-            'started_at': datetime.now().isoformat(),
-            'git_branch': branch,
-            'tmux_session': session,
-            'agent_type': agent_type or 'claude-code'
-        }
-        update_markdown_task(task_id, updates)
-    else:
-        # Update database task
-        database.update_task_status(
-            task_id=task_id,
-            agent_status='running',
-            phase='planning',
-            started_at=int(datetime.now().timestamp()),
-            git_branch=branch,
-            tmux_session=session,
-            agent_type=agent_type or 'claude-code'
-        )
+    # Update task in markdown file
+    updates = {
+        'agent_status': 'running',
+        'phase': 'planning',
+        'started_at': datetime.now().isoformat(),
+        'git_branch': branch,
+        'tmux_session': session,
+        'agent_type': agent_type or 'claude-code'
+    }
+    task_store.update_task(task_id, updates)
 
     # Copy task file to working directory
     copy_task_file_to_workdir(task_id, work_dir)
@@ -207,45 +141,29 @@ def start_task(task_id: str, agent_type: Optional[str] = None, working_dir: Opti
 
 def pause_task(task_id: str):
     """Pause a running task"""
-    task_data = database.get_task(task_id)
-    if task_data and task_data.get('source') == 'markdown':
-        update_markdown_task(task_id, {'agent_status': 'paused'})
-    else:
-        database.update_task_status(task_id, 'paused')
+    task_store.update_task(task_id, {'agent_status': 'paused'})
     database.add_event(task_id, 'task_paused')
 
 
 def resume_task(task_id: str):
     """Resume a paused task"""
-    task_data = database.get_task(task_id)
-    if task_data and task_data.get('source') == 'markdown':
-        update_markdown_task(task_id, {'agent_status': 'running'})
-    else:
-        database.update_task_status(task_id, 'running')
+    task_store.update_task(task_id, {'agent_status': 'running'})
     database.add_event(task_id, 'task_resumed')
 
 
 def complete_task(task_id: str):
     """Mark a task as complete"""
-    task_data = database.get_task(task_id)
-    if task_data and task_data.get('source') == 'markdown':
-        updates = {
-            'agent_status': 'completed',
-            'completed_at': datetime.now().isoformat()
-        }
-        update_markdown_task(task_id, updates)
-    else:
-        database.update_task_status(
-            task_id,
-            'completed',
-            completed_at=int(datetime.now().timestamp())
-        )
+    updates = {
+        'agent_status': 'completed',
+        'completed_at': datetime.now().isoformat()
+    }
+    task_store.update_task(task_id, updates)
     database.add_event(task_id, 'task_completed')
 
 
 def get_next_review() -> Optional[Dict]:
     """Get next task needing review"""
-    tasks = database.query_tasks(agent_status='blocked')
+    tasks = task_store.query_tasks(agent_status='blocked')
 
     if not tasks:
         return None
@@ -253,9 +171,9 @@ def get_next_review() -> Optional[Dict]:
     return tasks[0]
 
 
-# Markdown task operations
+# Task operations (all use markdown files)
 
-def create_markdown_task(
+def create_task(
     project_id: str,
     category: str,
     title: str,
@@ -265,7 +183,7 @@ def create_markdown_task(
     priority: str = "medium"
 ) -> Optional[str]:
     """
-    Create a new markdown task file
+    Create a new task as a markdown file.
 
     Args:
         project_id: Project ID
@@ -306,15 +224,16 @@ def create_markdown_task(
     body = f"# {title}\n\n{description or ''}"
     task_md.write_task_file(task_file, task_data, body)
 
-    # Sync to database
-    task_sync.sync_project_tasks(project_id)
-
     return task_id
 
 
-def update_markdown_task(task_id: str, updates: Dict) -> bool:
+# Aliases for backwards compatibility
+create_markdown_task = create_task
+
+
+def update_task(task_id: str, updates: Dict) -> bool:
     """
-    Update a markdown task file
+    Update a task's markdown file.
 
     Args:
         task_id: Task ID
@@ -323,35 +242,16 @@ def update_markdown_task(task_id: str, updates: Dict) -> bool:
     Returns:
         True if successful, False otherwise
     """
-    # Get task from database to verify it exists and is markdown
-    task = database.get_task(task_id)
-    if not task or task.get('source') != 'markdown':
-        return False
-
-    # Get project to find tasks_path
-    project = database.get_project(task['project_id'])
-    if not project or not project.get('tasks_path'):
-        return False
-
-    tasks_path = Path(project['tasks_path'])
-    task_file = tasks_path / f"{task_id}.md"
-
-    if not task_file.exists():
-        return False
-
-    # Update file
-    success = task_md.update_task_file(task_file, updates)
-
-    if success:
-        # Sync to database
-        task_sync.sync_project_tasks(task['project_id'])
-
-    return success
+    return task_store.update_task(task_id, updates)
 
 
-def delete_markdown_task(task_id: str) -> bool:
+# Alias for backwards compatibility
+update_markdown_task = update_task
+
+
+def delete_task(task_id: str) -> bool:
     """
-    Delete a markdown task file
+    Delete a task's markdown file.
 
     Args:
         task_id: Task ID
@@ -359,26 +259,8 @@ def delete_markdown_task(task_id: str) -> bool:
     Returns:
         True if successful, False otherwise
     """
-    # Get task from database
-    task = database.get_task(task_id)
-    if not task or task.get('source') != 'markdown':
-        return False
+    return task_store.delete_task(task_id)
 
-    # Get project to find tasks_path
-    project = database.get_project(task['project_id'])
-    if not project or not project.get('tasks_path'):
-        return False
 
-    tasks_path = Path(project['tasks_path'])
-    task_file = tasks_path / f"{task_id}.md"
-
-    try:
-        if task_file.exists():
-            task_file.unlink()
-
-        # Remove from database
-        database.delete_task(task_id)
-
-        return True
-    except Exception:
-        return False
+# Alias for backwards compatibility
+delete_markdown_task = delete_task

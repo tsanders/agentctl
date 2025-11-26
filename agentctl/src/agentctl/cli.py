@@ -8,6 +8,7 @@ from typing import Optional
 from enum import Enum
 
 from agentctl.core import database
+from agentctl.core import task_store
 from agentctl.core.task import start_task
 from agentctl.core.agent_monitor import (
     get_all_agent_statuses,
@@ -57,8 +58,8 @@ def dash():
 @app.command()
 def status():
     """Show quick status of all agents"""
-    agents = database.get_active_agents()
-    queued = database.get_queued_tasks()
+    agents = task_store.get_active_agents()
+    queued = task_store.get_queued_tasks()
 
     # Status summary
     console.print("\n🤖 [bold cyan]AGENT STATUS[/bold cyan]")
@@ -202,7 +203,7 @@ def attach(
     import subprocess
 
     # Get task to find tmux session
-    task = database.get_task(task_id)
+    task = task_store.get_task(task_id)
     if not task:
         console.print(f"[red]Error:[/red] Task '{task_id}' not found")
         raise typer.Exit(1)
@@ -235,7 +236,7 @@ def logs(
 ):
     """View or tail agent output from a task's tmux session"""
     # Get task to find tmux session
-    task = database.get_task(task_id)
+    task = task_store.get_task(task_id)
     if not task:
         console.print(f"[red]Error:[/red] Task '{task_id}' not found")
         raise typer.Exit(1)
@@ -315,7 +316,7 @@ def task_list(
     project: Optional[str] = typer.Option(None, help="Filter by project"),
 ):
     """List tasks with optional filters"""
-    tasks = database.query_tasks(
+    tasks = task_store.query_tasks(
         agent_status=agent_status.value if agent_status else None,
         priority=priority.value if priority else None,
         project=project
@@ -330,7 +331,7 @@ def task_list(
     table.add_column("Status", style="white")
     table.add_column("Priority", style="white")
     table.add_column("Phase", style="yellow")
-    table.add_column("Waiting", style="white")
+    table.add_column("Title", style="white")
 
     for task in tasks:
         priority_color = {
@@ -340,11 +341,11 @@ def task_list(
         }.get(task.get('priority', 'medium'), "white")
 
         table.add_row(
-            task['task_id'],
+            task.get('id', task.get('task_id', '-')),
             task.get('agent_status', 'unknown'),
             f"[{priority_color}]{task.get('priority', 'medium').upper()}[/{priority_color}]",
             task.get('phase') or "-",
-            task.get('waiting_time') or "-"
+            (task.get('title') or '-')[:40]
         )
 
     console.print(table)
@@ -508,7 +509,7 @@ def task_refresh(
     from agentctl.core.task import copy_task_file_to_workdir
 
     # Get task to find working directory
-    task = database.get_task(task_id)
+    task = task_store.get_task(task_id)
     if not task:
         console.print(f"[red]Error:[/red] Task '{task_id}' not found")
         raise typer.Exit(1)
@@ -516,6 +517,8 @@ def task_refresh(
     # Determine working directory
     if task.get('worktree_path'):
         work_dir = Path(task['worktree_path'])
+    elif task.get('repository_path'):
+        work_dir = Path(task['repository_path'])
     elif task.get('repository_id'):
         repo = database.get_repository(task['repository_id'])
         if repo:
@@ -550,7 +553,7 @@ app.add_typer(agent_app, name="agent")
 @agent_app.command("list")
 def agent_list():
     """List all active agents"""
-    agents = database.get_active_agents()
+    agents = task_store.get_active_agents()
 
     if not agents:
         console.print("[yellow]No active agents[/yellow]")

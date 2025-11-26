@@ -9,8 +9,9 @@ from datetime import datetime
 from typing import List, Dict, Optional, Tuple
 from pathlib import Path
 
-from agentctl.core import database, task_sync, task_md
-from agentctl.core.task import create_markdown_task, update_markdown_task, delete_markdown_task, copy_task_file_to_workdir
+from agentctl.core import database, task_md
+from agentctl.core import task_store
+from agentctl.core.task import create_task, update_task, delete_task, copy_task_file_to_workdir
 from agentctl.core.agent_monitor import get_agent_status, get_all_agent_statuses, get_health_display, HEALTH_ICONS
 
 
@@ -30,7 +31,7 @@ class AgentStatusWidget(Static):
 
     def update_agents(self) -> None:
         """Update agent list"""
-        agents = database.get_active_agents()
+        agents = task_store.get_active_agents()
 
         table = self.query_one("#agents-table", DataTable)
         table.clear()
@@ -68,7 +69,7 @@ class TaskQueueWidget(Static):
 
     def update_queue(self) -> None:
         """Update task queue"""
-        tasks = database.get_queued_tasks()
+        tasks = task_store.get_queued_tasks()
 
         table = self.query_one("#queue-table", DataTable)
         table.clear()
@@ -134,8 +135,8 @@ class ProjectStatsWidget(Static):
     def update_stats(self) -> None:
         """Update project statistics"""
         projects = database.list_projects()
-        agents = database.get_active_agents()
-        queued = database.get_queued_tasks()
+        agents = task_store.get_active_agents()
+        queued = task_store.get_queued_tasks()
 
         stats_text = f"""
 [bold]Projects:[/bold] {len(projects)}
@@ -483,7 +484,7 @@ class CreateTaskModal(ModalScreen):
                 project = database.get_project(project_id)
                 if project and project.get('tasks_path'):
                     # Create markdown task (task_id will be auto-generated)
-                    actual_task_id = create_markdown_task(
+                    actual_task_id = create_task(
                         project_id=project_id,
                         category=category,
                         title=title.strip(),
@@ -521,7 +522,7 @@ class EditTaskModal(ModalScreen):
     def __init__(self, task_id: str):
         super().__init__()
         self.task_id = task_id
-        self.task_data = database.get_task_with_details(task_id)
+        self.task_data = task_store.get_task_with_details(task_id)
 
     def compose(self) -> ComposeResult:
         if not self.task_data:
@@ -653,7 +654,7 @@ class EditTaskModal(ModalScreen):
                         'priority': priority,
                         'agent_status': agent_status
                     }
-                    success = update_markdown_task(self.task_id, updates)
+                    success = update_task(self.task_id, updates)
                     if not success:
                         self.app.notify("Failed to update markdown task", severity="error")
                         return
@@ -684,7 +685,7 @@ class StartTaskModal(ModalScreen):
     def __init__(self, task_id: str):
         super().__init__()
         self.task_id = task_id
-        self.task_data = database.get_task_with_details(task_id)
+        self.task_data = task_store.get_task_with_details(task_id)
         self.create_worktree = False
 
     def compose(self) -> ComposeResult:
@@ -777,7 +778,7 @@ class StartTaskModal(ModalScreen):
                         'agent_status': 'running',
                         'started_at': dt.now().isoformat()
                     }
-                    update_markdown_task(self.task_id, updates)
+                    update_task(self.task_id, updates)
                 else:
                     # Update database task agent_status
                     database.update_task_status(
@@ -809,7 +810,7 @@ class StartTaskModal(ModalScreen):
 
                     # Update task with worktree and branch info
                     if task_source == 'markdown':
-                        update_markdown_task(self.task_id, {
+                        update_task(self.task_id, {
                             'git_branch': worktree_info['branch_name'],
                             'worktree_path': worktree_info['worktree_path']
                         })
@@ -832,7 +833,7 @@ class StartTaskModal(ModalScreen):
 
                     # Update task with tmux session info
                     if task_source == 'markdown':
-                        update_markdown_task(self.task_id, {'tmux_session': tmux_session})
+                        update_task(self.task_id, {'tmux_session': tmux_session})
                     else:
                         database.update_task(self.task_id, tmux_session=tmux_session)
 
@@ -859,6 +860,35 @@ class StartTaskModal(ModalScreen):
 
             except Exception as e:
                 self.app.notify(f"Error starting task: {e}", severity="error")
+
+
+class ConfirmDeleteModal(ModalScreen):
+    """Modal for confirming task deletion"""
+
+    def __init__(self, task_id: str, task_title: str):
+        super().__init__()
+        self.task_id = task_id
+        self.task_title = task_title
+
+    def compose(self) -> ComposeResult:
+        yield Container(
+            Label("⚠️ Confirm Delete", id="modal-title"),
+            Static(f"Task: [bold]{self.task_id}[/bold]", classes="detail-row"),
+            Static(f"Title: {self.task_title[:50]}", classes="detail-row"),
+            Static("[red]This action cannot be undone![/red]", classes="detail-row"),
+            Container(
+                Button("Delete", id="delete-btn", variant="error"),
+                Button("Cancel", id="cancel-btn", variant="primary"),
+                classes="button-row"
+            ),
+            id="confirm-delete-modal"
+        )
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "cancel-btn":
+            self.dismiss(False)
+        elif event.button.id == "delete-btn":
+            self.dismiss(True)
 
 
 class ProjectDetailScreen(Screen):
@@ -932,7 +962,7 @@ class ProjectDetailScreen(Screen):
 
     def load_tasks(self) -> None:
         """Load and display tasks for this project"""
-        tasks = database.query_tasks(project=self.project_id)
+        tasks = task_store.query_tasks(project=self.project_id)
 
         table = self.query_one("#tasks-table", DataTable)
         table.clear()
@@ -1025,18 +1055,12 @@ class TaskManagementScreen(Screen):
         self.set_interval(5, self.load_tasks)
 
     def _sync_markdown_tasks(self) -> None:
-        """Sync all markdown tasks from projects"""
-        try:
-            results = task_sync.sync_all_tasks()
-            total_synced = sum(r.synced_count for r in results.values())
-            if total_synced > 0:
-                self.app.notify(f"Synced {total_synced} markdown tasks", severity="information")
-        except Exception as e:
-            self.app.notify(f"Sync error: {e}", severity="warning")
+        """No longer needed - tasks are read directly from markdown files"""
+        pass
 
     def load_tasks(self) -> None:
         """Load and display all tasks - compact for mobile"""
-        tasks = database.list_all_tasks()
+        tasks = task_store.list_all_tasks()
 
         table = self.query_one("#tasks-table", DataTable)
         table.clear()
@@ -1126,7 +1150,7 @@ class TaskManagementScreen(Screen):
             # Check if this is a markdown task
             if source == "[MD]":
                 # Get task to find the markdown file path
-                task = database.get_task(task_id)
+                task = task_store.get_task(task_id)
                 if task:
                     project = database.get_project(task['project_id'])
                     if project and project.get('tasks_path'):
@@ -1134,10 +1158,8 @@ class TaskManagementScreen(Screen):
                         task_file = Path(project['tasks_path']) / f"{task_id}.md"
 
                         if task_file.exists():
-                            # Define callback to sync and reload after nvim closes
+                            # Define callback to reload after nvim closes
                             def after_nvim():
-                                # Sync the changes after editing
-                                task_sync.sync_project_tasks(task['project_id'])
                                 # Reload the task list to show updated data
                                 self.load_tasks()
                                 self.app.notify(f"Task {task_id} updated", severity="success")
@@ -1177,13 +1199,28 @@ class TaskManagementScreen(Screen):
         if table.row_count > 0 and table.cursor_row is not None:
             row = table.get_row_at(table.cursor_row)
             task_id = str(row[1])  # Task ID is second column now
-            # TODO: Add confirmation modal
-            try:
-                database.delete_task(task_id)
-                self.load_tasks()
-                self.app.notify(f"Task {task_id} deleted", severity="success")
-            except Exception as e:
-                self.app.notify(f"Error deleting task: {e}", severity="error")
+
+            # Get task details for confirmation
+            task_data = task_store.get_task(task_id)
+            task_title = task_data.get('title', 'Unknown') if task_data else 'Unknown'
+
+            def handle_delete(confirmed: bool) -> None:
+                if confirmed:
+                    try:
+                        # Check if markdown or database task
+                        if task_data and task_data.get('source') == 'markdown':
+                            success = delete_task(task_id)
+                            if not success:
+                                self.app.notify("Failed to delete markdown task", severity="error")
+                                return
+                        else:
+                            database.delete_task(task_id)
+                        self.load_tasks()
+                        self.app.notify(f"Task {task_id} deleted", severity="warning")
+                    except Exception as e:
+                        self.app.notify(f"Error deleting task: {e}", severity="error")
+
+            self.app.push_screen(ConfirmDeleteModal(task_id, task_title), handle_delete)
 
 
 class CreateTaskPromptScreen(Screen):
@@ -1376,8 +1413,6 @@ Press ESC to go back""")
                         final_file = tasks_path / f"{next_id}.md"
                         temp_file.rename(final_file)
 
-                        # Sync to database
-                        task_sync.sync_project_tasks(self.project_id)
                         self.app.notify(f"Task {next_id} created!", severity="success")
                         task_created = True
                     else:
@@ -1470,7 +1505,7 @@ class TaskDetailScreen(Screen):
 
     def load_task_details(self) -> None:
         """Load and display comprehensive task information"""
-        self.task_data = database.get_task_with_details(self.task_id)
+        self.task_data = task_store.get_task_with_details(self.task_id)
 
         if not self.task_data:
             self.app.notify(f"Task {self.task_id} not found", severity="error")
@@ -1554,10 +1589,8 @@ class TaskDetailScreen(Screen):
                 task_file = Path(project['tasks_path']) / f"{self.task_id}.md"
 
                 if task_file.exists():
-                    # Define callback to sync and reload after nvim closes
+                    # Define callback to reload after nvim closes
                     def after_nvim():
-                        # Sync the changes after editing
-                        task_sync.sync_project_tasks(self.task_data['project_id'])
                         # Reload the task details to show updated data
                         self.load_task_details()
                         self.app.notify(f"Task {self.task_id} updated", severity="success")
@@ -1639,7 +1672,7 @@ class TaskDetailScreen(Screen):
                 'agent_status': 'completed',
                 'completed_at': datetime.now().isoformat()
             }
-            success = update_markdown_task(self.task_id, updates)
+            success = update_task(self.task_id, updates)
             if not success:
                 self.app.notify("Failed to update markdown task", severity="error")
                 return
@@ -1657,21 +1690,27 @@ class TaskDetailScreen(Screen):
 
     def action_delete_task(self) -> None:
         """Delete this task with confirmation"""
-        # Check if this is a markdown task
-        task_source = self.task_data.get('source', 'database')
-        if task_source == 'markdown':
-            # Delete markdown task
-            success = delete_markdown_task(self.task_id)
-            if not success:
-                self.app.notify("Failed to delete markdown task", severity="error")
-                return
-        else:
-            # Delete database task
-            database.delete_task(self.task_id)
+        task_title = self.task_data.get('title', 'Unknown')
 
-        database.add_event(self.task_id, "deleted")
-        self.app.notify(f"Task {self.task_id} deleted", severity="warning")
-        self.app.pop_screen()
+        def handle_delete(confirmed: bool) -> None:
+            if confirmed:
+                # Check if this is a markdown task
+                task_source = self.task_data.get('source', 'database')
+                if task_source == 'markdown':
+                    # Delete markdown task
+                    success = delete_task(self.task_id)
+                    if not success:
+                        self.app.notify("Failed to delete markdown task", severity="error")
+                        return
+                else:
+                    # Delete database task
+                    database.delete_task(self.task_id)
+
+                database.add_event(self.task_id, "deleted")
+                self.app.notify(f"Task {self.task_id} deleted", severity="warning")
+                self.app.pop_screen()
+
+        self.app.push_screen(ConfirmDeleteModal(self.task_id, task_title), handle_delete)
 
     def action_cycle_status(self) -> None:
         """Cycle through agent_status options"""
@@ -1706,15 +1745,10 @@ class TaskDetailScreen(Screen):
 
         if task_source == 'markdown':
             # Update markdown task
-            success = update_markdown_task(self.task_id, {field: value})
+            success = update_task(self.task_id, {field: value})
             if not success:
                 self.app.notify(f"Failed to update {field}", severity="error")
                 return
-            # Sync changes
-            task_sync.sync_project_tasks(self.task_data['project_id'])
-        else:
-            # Update database task
-            database.update_task(self.task_id, **{field: value})
 
         self.app.notify(f"{field.capitalize()} changed to: {value}", severity="success")
         self.load_task_details()
@@ -1943,7 +1977,7 @@ class AgentsMonitorScreen(Screen):
         task_id = self.agents_data[self.selected_index]["task_id"]
 
         # Get task to find tmux session
-        task = database.get_task(task_id)
+        task = task_store.get_task(task_id)
         if not task:
             self.app.notify(f"Task {task_id} not found", severity="error")
             return
@@ -2170,8 +2204,8 @@ class AgentDashboard(App):
 
     def action_status(self) -> None:
         """Show status notification"""
-        agents = database.get_active_agents()
-        queued = database.get_queued_tasks()
+        agents = task_store.get_active_agents()
+        queued = task_store.get_queued_tasks()
         self.notify(f"Active: {len(agents)} | Queued: {len(queued)}", title="Status")
 
     def action_manage_projects(self) -> None:
