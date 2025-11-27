@@ -2987,7 +2987,7 @@ class AgentDashboard(App):
         border: solid $accent;
         border-title-color: $accent;
         border-title-style: bold;
-        margin-bottom: 1;
+        margin-bottom: 0;
         padding: 0 1;
         height: auto;
     }
@@ -2996,7 +2996,7 @@ class AgentDashboard(App):
         border: solid $success;
         border-title-color: $success;
         border-title-style: bold;
-        margin-bottom: 1;
+        margin-bottom: 0;
         padding: 0 1;
         height: auto;
     }
@@ -3005,7 +3005,7 @@ class AgentDashboard(App):
         border: solid $warning;
         border-title-color: $warning;
         border-title-style: bold;
-        margin-bottom: 1;
+        margin-bottom: 0;
         padding: 0;
         height: auto;
     }
