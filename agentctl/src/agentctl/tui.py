@@ -1125,7 +1125,7 @@ class TaskManagementScreen(Screen):
             # Full columns - use h/l to scroll horizontally
             table.add_columns(
                 "ID", "Title", "Status", "Pri", "Cat", "Type",
-                "Project", "Agent", "Branch", "tmux", "Notes"
+                "Phase", "Project", "Agent", "Branch", "tmux", "Notes"
             )
             table.cursor_type = "row"
 
@@ -1171,6 +1171,23 @@ class TaskManagementScreen(Screen):
             notes = task.get('notes', '')
             notes_preview = notes[:20] + "..." if len(notes) > 20 else (notes or "-")
 
+            # Phase (shortened for table)
+            phase = task.get('phase') or '-'
+            if phase != '-':
+                # Shorten phase names for compact display
+                phase_short = {
+                    'preparation': 'prep',
+                    'registered': 'reg',
+                    'agent_created': 'created',
+                    'initialization': 'init',
+                    'implementation': 'impl',
+                    'agent_review': 'review',
+                    'human_review': 'h-review',
+                    'completed': 'done'
+                }.get(phase, phase[:8])
+            else:
+                phase_short = '-'
+
             table.add_row(
                 task['task_id'],
                 task.get('title', '-')[:35],
@@ -1178,6 +1195,7 @@ class TaskManagementScreen(Screen):
                 priority_display,
                 category,
                 task_type,
+                phase_short,
                 project,
                 agent_display,
                 branch,
