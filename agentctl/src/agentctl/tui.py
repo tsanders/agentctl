@@ -929,16 +929,131 @@ class EditNotesModal(ModalScreen):
         self.dismiss(event.value)
 
 
+class HelpOverlay(ModalScreen):
+    """Modal overlay showing all keybindings organized by category"""
+
+    BINDINGS = [
+        ("escape", "dismiss", "Close"),
+        ("question_mark", "dismiss", "Close"),
+        ("q", "dismiss", "Close"),
+    ]
+
+    def __init__(self, screen_name: str = "General"):
+        super().__init__()
+        self.screen_name = screen_name
+
+    def compose(self) -> ComposeResult:
+        help_content = self._get_help_content()
+        yield Container(
+            Static(f"⌨️  AGENTCTL KEYBINDINGS - {self.screen_name.upper()}", id="help-title"),
+            ScrollableContainer(
+                Static(help_content, id="help-content", markup=True),
+                id="help-scroll"
+            ),
+            Static("Press ? or esc to close", id="help-footer"),
+            id="help-overlay"
+        )
+
+    def _get_help_content(self) -> str:
+        """Generate help content based on current screen"""
+
+        # Common keybindings for all screens
+        common = """[bold cyan]NAVIGATION[/bold cyan]
+  j / ↓      Move cursor down
+  k / ↑      Move cursor up
+  h / ←      Scroll/Move left
+  l / →      Scroll/Move right
+  enter      Select / View details
+  esc        Go back / Close
+
+[bold cyan]SYSTEM[/bold cyan]
+  r          Refresh current view
+  q          Quit application
+  ?          Show this help
+"""
+
+        # Screen-specific keybindings
+        screen_specific = {
+            "Dashboard": """[bold cyan]QUICK ACCESS[/bold cyan]
+  s          View status
+  p          Manage projects
+  t          Manage tasks
+  a          Monitor agents
+  y          View analytics
+""",
+            "TaskDetail": """[bold cyan]TASK ACTIONS[/bold cyan]
+  s          Start task (create worktree/tmux)
+  c          Complete task
+  d          Delete task
+
+[bold cyan]TASK PROPERTIES[/bold cyan]
+  1          Cycle status
+  2          Cycle priority
+  3          Cycle category
+  4          Advance to next phase
+  5          Go to previous phase
+
+[bold cyan]AGENT INTERACTION[/bold cyan]
+  a          Attach to tmux session
+  g          Open session in Ghostty
+  l          Save session log
+  p          View user prompts
+
+[bold cyan]EDITING[/bold cyan]
+  e          Edit task file in nvim
+  n          Edit task notes
+  f          Refresh TASK.md from file
+""",
+            "TaskManagement": """[bold cyan]TASK MANAGEMENT[/bold cyan]
+  n          Create new task
+  e          Edit selected task
+  d          Delete selected task
+  enter      View task details
+""",
+            "ProjectManagement": """[bold cyan]PROJECT MANAGEMENT[/bold cyan]
+  n          Create new project
+  e          Edit selected project
+  enter      View project details
+""",
+            "ProjectDetail": """[bold cyan]PROJECT ACTIONS[/bold cyan]
+  r          Add repository
+  e          Edit selected repository
+  t          Create task in project
+  enter      View task/repo details
+""",
+            "AgentsMonitor": """[bold cyan]AGENT MONITORING[/bold cyan]
+  a          Attach to tmux session
+  g          Open session in Ghostty
+  l          Save session log
+  p          View user prompts
+  enter      View task details
+""",
+            "Analytics": """[bold cyan]ANALYTICS[/bold cyan]
+  p          View all user prompts
+  r          Refresh analytics
+""",
+            "Prompts": """[bold cyan]PROMPTS BROWSER[/bold cyan]
+  enter      View prompt details
+"""
+        }
+
+        specific = screen_specific.get(self.screen_name, "")
+        return specific + "\n" + common
+
+    def action_dismiss(self) -> None:
+        """Close the help overlay"""
+        self.dismiss()
+
+
 class ProjectDetailScreen(Screen):
     """Screen showing project details with repositories and tasks"""
 
     BINDINGS = [
         ("escape", "go_back", "Back"),
-        ("r", "add_repo", "Add Repo"),
-        ("e", "edit_repo", "Edit Repo"),
         ("t", "create_task", "Create Task"),
         ("j", "cursor_down", "Down"),
         ("k", "cursor_up", "Up"),
+        ("question_mark", "show_help", "Help"),
         ("q", "quit", "Quit"),
     ]
 
@@ -1052,6 +1167,10 @@ class ProjectDetailScreen(Screen):
 
         self.app.push_screen(CreateTaskModal(project_id=self.project_id), check_result)
 
+    def action_show_help(self) -> None:
+        """Show help overlay"""
+        self.app.push_screen(HelpOverlay("ProjectDetail"))
+
 
 class TaskManagementScreen(Screen):
     """Screen showing all tasks across all projects"""
@@ -1059,14 +1178,9 @@ class TaskManagementScreen(Screen):
     BINDINGS = [
         ("escape", "go_back", "Back"),
         ("n", "create_task", "New Task"),
-        ("e", "edit_task", "Edit Task"),
-        ("d", "delete_task", "Delete Task"),
         ("j", "cursor_down", "Down"),
         ("k", "cursor_up", "Up"),
-        ("h", "scroll_left", "Left"),
-        ("l", "scroll_right", "Right"),
-        ("left", "scroll_left", "Left"),
-        ("right", "scroll_right", "Right"),
+        ("question_mark", "show_help", "Help"),
         ("q", "quit", "Quit"),
     ]
 
@@ -1301,6 +1415,10 @@ class TaskManagementScreen(Screen):
 
             self.app.push_screen(ConfirmDeleteModal(task_id, task_title), handle_delete)
 
+    def action_show_help(self) -> None:
+        """Show help overlay"""
+        self.app.push_screen(HelpOverlay("TaskManagement"))
+
 
 class CreateTaskPromptScreen(Screen):
     """Screen for collecting task metadata via simple prompts"""
@@ -1515,22 +1633,12 @@ class TaskDetailScreen(Screen):
 
     BINDINGS = [
         ("escape", "go_back", "Back"),
-        ("s", "start_task", "Start Task"),
-        ("e", "edit_in_nvim", "Edit in nvim"),
-        ("a", "attach_tmux", "Attach tmux"),
-        ("f", "refresh_task_file", "Refresh TASK.md"),
-        ("n", "edit_notes", "Edit Notes"),
-        ("l", "save_session_log", "Save Log"),
-        ("p", "view_prompts", "Prompts"),
-        ("1", "cycle_status", "Cycle Status"),
-        ("2", "cycle_priority", "Cycle Priority"),
-        ("3", "cycle_category", "Cycle Category"),
-        ("4", "advance_phase", "Next Phase"),
-        ("5", "regress_phase", "Prev Phase"),
-        ("c", "complete_task", "Complete"),
-        ("d", "delete_task", "Delete"),
+        ("s", "start_task", "Start"),
+        ("a", "attach_tmux", "Attach"),
+        ("e", "edit_in_nvim", "Edit"),
         ("j", "scroll_down", "Down"),
         ("k", "scroll_up", "Up"),
+        ("question_mark", "show_help", "Help"),
         ("q", "quit", "Quit"),
     ]
 
@@ -1924,16 +2032,20 @@ class TaskDetailScreen(Screen):
             else:
                 self.app.notify("Failed to capture session", severity="error")
 
+    def action_show_help(self) -> None:
+        """Show help overlay"""
+        self.app.push_screen(HelpOverlay("TaskDetail"))
+
 
 class ProjectListScreen(Screen):
     """Screen showing all projects"""
 
     BINDINGS = [
         ("escape", "go_back", "Back"),
-        ("n", "new_project", "New Project"),
-        ("e", "edit_project", "Edit Project"),
+        ("n", "new_project", "New"),
         ("j", "cursor_down", "Down"),
         ("k", "cursor_up", "Up"),
+        ("question_mark", "show_help", "Help"),
         ("q", "quit", "Quit"),
     ]
 
@@ -2192,20 +2304,21 @@ class AgentCard(Static):
 
         return lines
 
+    def action_show_help(self) -> None:
+        """Show help overlay"""
+        self.app.push_screen(HelpOverlay("ProjectManagement"))
+
 
 class AgentsMonitorScreen(Screen):
     """Dedicated screen for monitoring all agents"""
 
     BINDINGS = [
         ("escape", "go_back", "Back"),
-        ("enter", "view_task", "View Task"),
-        ("a", "attach_tmux", "Attach tmux"),
-        ("g", "open_ghostty", "Ghostty"),
-        ("l", "save_session_log", "Save Log"),
-        ("p", "view_prompts", "Prompts"),
-        ("r", "refresh", "Refresh"),
+        ("enter", "view_task", "View"),
+        ("a", "attach_tmux", "Attach"),
         ("j", "cursor_down", "Down"),
         ("k", "cursor_up", "Up"),
+        ("question_mark", "show_help", "Help"),
         ("q", "quit", "Quit"),
     ]
 
@@ -2445,6 +2558,10 @@ class AgentsMonitorScreen(Screen):
             else:
                 self.app.notify("Failed to capture session", severity="error")
 
+    def action_show_help(self) -> None:
+        """Show help overlay"""
+        self.app.push_screen(HelpOverlay("AgentsMonitor"))
+
 
 class UserPromptsScreen(Screen):
     """Screen for browsing user prompts from sessions"""
@@ -2453,7 +2570,7 @@ class UserPromptsScreen(Screen):
         ("escape", "go_back", "Back"),
         ("j", "cursor_down", "Down"),
         ("k", "cursor_up", "Up"),
-        ("enter", "view_prompt", "View"),
+        ("question_mark", "show_help", "Help"),
         ("q", "quit", "Quit"),
     ]
 
@@ -2570,6 +2687,10 @@ class UserPromptsScreen(Screen):
         """View full prompt (already shown in detail pane)"""
         pass  # Detail is already shown
 
+    def action_show_help(self) -> None:
+        """Show help overlay"""
+        self.app.push_screen(HelpOverlay("Prompts"))
+
 
 class AnalyticsScreen(Screen):
     """Screen showing session analytics and metrics"""
@@ -2577,9 +2698,9 @@ class AnalyticsScreen(Screen):
     BINDINGS = [
         ("escape", "go_back", "Back"),
         ("r", "refresh", "Refresh"),
-        ("p", "view_prompts", "Prompts"),
         ("j", "scroll_down", "Down"),
         ("k", "scroll_up", "Up"),
+        ("question_mark", "show_help", "Help"),
         ("q", "quit", "Quit"),
     ]
 
@@ -2707,6 +2828,10 @@ Total Prompts: {summary['total_user_prompts']}
         """Open user prompts browser"""
         self.app.push_screen(UserPromptsScreen())
 
+    def action_show_help(self) -> None:
+        """Show help overlay"""
+        self.app.push_screen(HelpOverlay("Analytics"))
+
 
 class AgentDashboard(App):
     """Main TUI dashboard application for agentctl"""
@@ -2773,6 +2898,42 @@ class AgentDashboard(App):
         border: solid $accent;
         background: $surface;
         padding: 0 1;
+    }
+
+    /* Help overlay styles */
+    #help-overlay {
+        align: center middle;
+        width: 70;
+        max-height: 90%;
+        border: thick $accent;
+        background: $surface;
+        padding: 0;
+    }
+
+    #help-title {
+        text-align: center;
+        text-style: bold;
+        background: $accent;
+        color: $text;
+        padding: 1;
+    }
+
+    #help-scroll {
+        height: 1fr;
+        padding: 0 2;
+        background: $surface;
+    }
+
+    #help-content {
+        padding: 1 0;
+    }
+
+    #help-footer {
+        text-align: center;
+        background: $boost;
+        color: $text-muted;
+        padding: 1;
+        text-style: italic;
     }
 
     Select {
@@ -2972,16 +3133,13 @@ class AgentDashboard(App):
     """
 
     BINDINGS = [
-        ("r", "refresh", "Refresh"),
-        ("q", "quit", "Quit"),
-        ("s", "status", "Status"),
         ("p", "manage_projects", "Projects"),
         ("t", "manage_tasks", "Tasks"),
         ("a", "monitor_agents", "Agents"),
-        ("y", "view_analytics", "Analytics"),
         ("j", "cursor_down", "Down"),
         ("k", "cursor_up", "Up"),
-        ("enter", "select_agent", "Select"),
+        ("question_mark", "show_help", "Help"),
+        ("q", "quit", "Quit"),
     ]
 
     def compose(self) -> ComposeResult:
@@ -3053,6 +3211,10 @@ class AgentDashboard(App):
                     self.push_screen(TaskDetailScreen(task_id))
         except Exception:
             pass
+
+    def action_show_help(self) -> None:
+        """Show help overlay"""
+        self.push_screen(HelpOverlay("Dashboard"))
 
 
 def run_dashboard(open_agents: bool = False):
