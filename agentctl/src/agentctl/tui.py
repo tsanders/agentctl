@@ -12,6 +12,7 @@ from pathlib import Path
 from agentctl.core import database, task_md
 from agentctl.core import task_store
 from agentctl.core.task import create_task, update_task, delete_task, copy_task_file_to_workdir
+from agentctl.core.tmux import send_keys as tmux_send_keys
 from agentctl.core.agent_monitor import (
     get_agent_status, get_all_agent_statuses, get_health_display, HEALTH_ICONS,
     check_and_notify_state_changes, save_session_log
@@ -986,6 +987,53 @@ class EditNotesModal(ModalScreen):
         self.dismiss(event.value)
 
 
+class SendPromptModal(ModalScreen):
+    """Modal for sending a prompt to an agent's tmux session"""
+
+    def __init__(self, task_id: str, tmux_session: str):
+        super().__init__()
+        self.task_id = task_id
+        self.tmux_session = tmux_session
+
+    def compose(self) -> ComposeResult:
+        yield Container(
+            Label(f"📤 Send Prompt: {self.task_id}", id="modal-title"),
+            Static(f"[dim]Session: {self.tmux_session}[/dim]", classes="detail-row"),
+            Input(placeholder="Enter prompt to send to agent...", id="prompt-input"),
+            Container(
+                Button("Send", id="send-btn", variant="success"),
+                Button("Send (no Enter)", id="send-no-enter-btn", variant="warning"),
+                Button("Cancel", id="cancel-btn", variant="primary"),
+                classes="button-row"
+            ),
+            id="send-prompt-modal"
+        )
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "cancel-btn":
+            self.dismiss(None)
+        elif event.button.id == "send-btn":
+            prompt = self.query_one("#prompt-input", Input).value
+            if prompt:
+                success = tmux_send_keys(self.tmux_session, prompt, enter=True)
+                self.dismiss(("sent", success, prompt))
+            else:
+                self.app.notify("Please enter a prompt", severity="warning")
+        elif event.button.id == "send-no-enter-btn":
+            prompt = self.query_one("#prompt-input", Input).value
+            if prompt:
+                success = tmux_send_keys(self.tmux_session, prompt, enter=False)
+                self.dismiss(("sent_no_enter", success, prompt))
+            else:
+                self.app.notify("Please enter a prompt", severity="warning")
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Handle Enter key in input - send with Enter"""
+        if event.value:
+            success = tmux_send_keys(self.tmux_session, event.value, enter=True)
+            self.dismiss(("sent", success, event.value))
+
+
 class HelpOverlay(ModalScreen):
     """Modal overlay showing all keybindings organized by category"""
 
@@ -1228,6 +1276,7 @@ class TaskManagementScreen(Screen):
     BINDINGS = [
         ("escape", "go_back", "Back"),
         ("n", "create_task", "New Task"),
+        ("p", "send_prompt", "Prompt"),
         ("j", "cursor_down", "Down"),
         ("k", "cursor_up", "Up"),
         ("f", "toggle_filter", "Filter"),
@@ -1267,6 +1316,12 @@ class TaskManagementScreen(Screen):
             Static("📋 TASK MANAGEMENT", id="tasks-screen-title", classes="screen-title"),
             DataTable(id="tasks-table"),
             id="tasks-container"
+        )
+        yield Horizontal(
+            Static("prompt> ", id="prompt-label"),
+            Input(placeholder="Enter prompt (Enter=send, Esc=cancel)", id="prompt-input"),
+            id="prompt-bar",
+            classes="prompt-bar-hidden"
         )
         yield Footer()
 
@@ -1418,6 +1473,80 @@ class TaskManagementScreen(Screen):
     def action_go_back(self) -> None:
         """Go back to main dashboard"""
         self.app.pop_screen()
+
+    def action_send_prompt(self) -> None:
+        """Show inline prompt input bar for the selected task"""
+        from agentctl.core.tmux import session_exists
+
+        table = self.query_one("#tasks-table", DataTable)
+        if table.row_count == 0 or table.cursor_row is None:
+            self.app.notify("No task selected", severity="warning")
+            return
+
+        row = table.get_row_at(table.cursor_row)
+        task_id = str(row[0])  # Task ID is first column
+
+        # Get task data to find tmux session
+        task_data = task_store.get_task_with_details(task_id)
+        if not task_data:
+            self.app.notify(f"Task {task_id} not found", severity="error")
+            return
+
+        tmux_session = task_data.get('tmux_session')
+        if not tmux_session:
+            self.app.notify("No tmux session for this task", severity="warning")
+            return
+
+        if not session_exists(tmux_session):
+            self.app.notify(f"Session '{tmux_session}' not found", severity="error")
+            return
+
+        # Store task info for when prompt is submitted
+        self._prompt_task_id = task_id
+        self._prompt_tmux_session = tmux_session
+
+        # Show the prompt bar and focus the input
+        prompt_bar = self.query_one("#prompt-bar")
+        prompt_bar.remove_class("prompt-bar-hidden")
+        prompt_bar.add_class("prompt-bar-visible")
+        prompt_input = self.query_one("#prompt-input", Input)
+        prompt_input.value = ""
+        prompt_input.focus()
+
+    def _hide_prompt_bar(self) -> None:
+        """Hide the inline prompt bar"""
+        prompt_bar = self.query_one("#prompt-bar")
+        prompt_bar.remove_class("prompt-bar-visible")
+        prompt_bar.add_class("prompt-bar-hidden")
+        prompt_input = self.query_one("#prompt-input", Input)
+        prompt_input.value = ""
+        self._prompt_task_id = None
+        self._prompt_tmux_session = None
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Handle Enter in the prompt input"""
+        if event.input.id == "prompt-input" and event.value:
+            tmux_session = getattr(self, '_prompt_tmux_session', None)
+            if tmux_session:
+                success = tmux_send_keys(tmux_session, event.value, enter=True)
+                if success:
+                    preview = event.value[:50] + "..." if len(event.value) > 50 else event.value
+                    self.app.notify(f"Sent: {preview}", severity="success")
+                else:
+                    self.app.notify("Failed to send prompt", severity="error")
+            self._hide_prompt_bar()
+
+    def on_key(self, event) -> None:
+        """Handle Escape to cancel prompt input"""
+        if event.key == "escape":
+            try:
+                prompt_bar = self.query_one("#prompt-bar")
+                if "prompt-bar-visible" in prompt_bar.classes:
+                    self._hide_prompt_bar()
+                    event.prevent_default()
+                    event.stop()
+            except Exception:
+                pass
 
     def _build_repository_comment(self, project_id: str) -> str:
         """Build a helpful comment showing available repositories"""
@@ -1755,6 +1884,7 @@ class TaskDetailScreen(Screen):
         ("escape", "go_back", "Back"),
         ("s", "start_task", "Start"),
         ("a", "attach_tmux", "Attach"),
+        ("p", "send_prompt", "Prompt"),
         ("e", "edit_in_nvim", "Edit"),
         ("t", "toggle_tmux_output", "tmux↕"),
         ("j", "scroll_down", "Down"),
@@ -1835,6 +1965,57 @@ class TaskDetailScreen(Screen):
             with self.app.suspend():
                 subprocess.run(["tmux", "attach", "-t", tmux_session])
 
+    def action_send_prompt(self) -> None:
+        """Show inline prompt input bar"""
+        from agentctl.core.tmux import session_exists
+
+        tmux_session = self.task_data.get('tmux_session') if self.task_data else None
+        if not tmux_session:
+            self.app.notify("No tmux session for this task", severity="warning")
+            return
+
+        if not session_exists(tmux_session):
+            self.app.notify(f"Session '{tmux_session}' not found", severity="error")
+            return
+
+        # Show the prompt bar and focus the input
+        prompt_bar = self.query_one("#prompt-bar")
+        prompt_bar.remove_class("prompt-bar-hidden")
+        prompt_bar.add_class("prompt-bar-visible")
+        prompt_input = self.query_one("#prompt-input", Input)
+        prompt_input.value = ""
+        prompt_input.focus()
+
+    def _hide_prompt_bar(self) -> None:
+        """Hide the inline prompt bar"""
+        prompt_bar = self.query_one("#prompt-bar")
+        prompt_bar.remove_class("prompt-bar-visible")
+        prompt_bar.add_class("prompt-bar-hidden")
+        prompt_input = self.query_one("#prompt-input", Input)
+        prompt_input.value = ""
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Handle Enter in the prompt input"""
+        if event.input.id == "prompt-input" and event.value:
+            tmux_session = self.task_data.get('tmux_session') if self.task_data else None
+            if tmux_session:
+                success = tmux_send_keys(tmux_session, event.value, enter=True)
+                if success:
+                    preview = event.value[:50] + "..." if len(event.value) > 50 else event.value
+                    self.app.notify(f"Sent: {preview}", severity="success")
+                else:
+                    self.app.notify("Failed to send prompt", severity="error")
+            self._hide_prompt_bar()
+
+    def on_key(self, event) -> None:
+        """Handle Escape to cancel prompt input"""
+        if event.key == "escape":
+            prompt_bar = self.query_one("#prompt-bar")
+            if "prompt-bar-visible" in prompt_bar.classes:
+                self._hide_prompt_bar()
+                event.prevent_default()
+                event.stop()
+
     def compose(self) -> ComposeResult:
         yield Header()
         yield ScrollableContainer(
@@ -1879,6 +2060,12 @@ class TaskDetailScreen(Screen):
             ),
 
             id="task-detail-container"
+        )
+        yield Horizontal(
+            Static("prompt> ", id="prompt-label"),
+            Input(placeholder="Enter prompt (Enter=send, Esc=cancel)", id="prompt-input"),
+            id="prompt-bar",
+            classes="prompt-bar-hidden"
         )
         yield Footer()
 
@@ -2734,7 +2921,7 @@ class AgentDashboard(App):
     }
 
     /* Modal styles - compact for mobile */
-    #create-project-modal, #create-repo-modal, #edit-project-modal, #edit-repo-modal, #create-task-modal, #edit-task-modal, #start-task-modal {
+    #create-project-modal, #create-repo-modal, #edit-project-modal, #edit-repo-modal, #create-task-modal, #edit-task-modal, #start-task-modal, #send-prompt-modal {
         align: center middle;
         width: 60;
         height: auto;
@@ -2940,6 +3127,39 @@ class AgentDashboard(App):
     .analytics-section {
         margin: 1 0;
         padding: 0;
+    }
+
+    /* Inline prompt bar styles */
+    #prompt-bar {
+        dock: bottom;
+        height: auto;
+        background: $boost;
+        border-top: solid $accent;
+        padding: 0 1;
+    }
+
+    #prompt-bar.prompt-bar-hidden {
+        display: none;
+    }
+
+    #prompt-bar.prompt-bar-visible {
+        display: block;
+    }
+
+    #prompt-label {
+        color: $success;
+        text-style: bold;
+        width: auto;
+    }
+
+    #prompt-bar Input {
+        width: 1fr;
+        border: none;
+        background: transparent;
+    }
+
+    #prompt-bar Horizontal {
+        height: auto;
     }
 
     /* User prompts screen styles */

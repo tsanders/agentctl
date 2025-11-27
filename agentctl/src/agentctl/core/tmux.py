@@ -97,3 +97,41 @@ def capture_pane(session_name: str, lines: int = 100) -> Optional[str]:
         return '\n'.join(captured.stdout) if captured.stdout else None
     except Exception:
         return None
+
+
+def send_keys(session_name: str, keys: str, enter: bool = True, window: int = 0, pane: int = 0) -> bool:
+    """Send keys to a tmux session.
+
+    Args:
+        session_name: Name of the tmux session
+        keys: The keys/text to send
+        enter: Whether to press Enter after sending keys (default True)
+        window: Window index (default 0)
+        pane: Pane index (default 0)
+
+    Returns:
+        True if successful, False otherwise
+    """
+    server = get_server()
+    session = server.find_where({"session_name": session_name})
+
+    if not session:
+        return False
+
+    # Get the target window
+    if window >= len(session.windows):
+        return False
+
+    target_window = session.windows[window]
+
+    # Get the target pane
+    if pane >= len(target_window.panes):
+        return False
+
+    target_pane = target_window.panes[pane]
+
+    try:
+        target_pane.send_keys(keys, enter=enter)
+        return True
+    except Exception:
+        return False
