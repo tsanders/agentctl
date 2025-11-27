@@ -61,3 +61,38 @@ def list_sessions():
     """List all tmux sessions"""
     server = get_server()
     return [s.name for s in server.sessions]
+
+
+def capture_pane(session_name: str, lines: int = 100) -> Optional[str]:
+    """Capture content from tmux pane.
+
+    Args:
+        session_name: Name of the tmux session
+        lines: Number of lines to capture from pane history
+
+    Returns:
+        Captured pane content as string, or None if session not found
+    """
+    server = get_server()
+    session = server.find_where({"session_name": session_name})
+
+    if not session:
+        return None
+
+    # Get the active pane from the first window
+    if not session.windows:
+        return None
+
+    window = session.windows[0]
+    if not window.panes:
+        return None
+
+    pane = window.panes[0]
+
+    # Capture pane content
+    try:
+        # Use cmd to capture pane content with history
+        captured = pane.cmd('capture-pane', '-p', '-S', f'-{lines}')
+        return captured.stdout[0] if captured.stdout else None
+    except Exception:
+        return None

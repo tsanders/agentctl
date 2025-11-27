@@ -451,6 +451,8 @@ def get_all_agent_statuses() -> List[Dict]:
         List of agent status dicts, sorted by health priority
         (errors/waiting first, then idle, then active)
     """
+    from agentctl.core.phase_detector import check_and_update_phase
+
     # Get all tasks that have tmux sessions
     tasks = list_all_tasks()
 
@@ -460,7 +462,15 @@ def get_all_agent_statuses() -> List[Dict]:
         if not tmux_session:
             continue
 
-        status = get_agent_status(task["task_id"], tmux_session)
+        # Auto-detect and update phase if needed
+        task_id = task["task_id"]
+        updated_phase = check_and_update_phase(task_id)
+        if updated_phase:
+            # Refresh task data to get updated phase
+            from agentctl.core.task_store import get_task
+            task = get_task(task_id) or task
+
+        status = get_agent_status(task_id, tmux_session)
         status["task_title"] = task.get("title", "")
         status["task_agent_status"] = task.get("agent_status", "")
         status["project"] = task.get("project_name", task.get("project", ""))
