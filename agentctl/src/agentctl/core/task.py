@@ -180,7 +180,8 @@ def create_task(
     description: Optional[str] = None,
     repository_id: Optional[str] = None,
     task_type: str = "feature",
-    priority: str = "medium"
+    priority: str = "medium",
+    task_id: Optional[str] = None
 ) -> Optional[str]:
     """
     Create a new task as a markdown file.
@@ -193,6 +194,7 @@ def create_task(
         repository_id: Optional repository ID
         task_type: Task type
         priority: Task priority
+        task_id: Optional task ID (if not provided, auto-generated)
 
     Returns:
         Task ID if successful, None otherwise
@@ -204,8 +206,9 @@ def create_task(
 
     tasks_path = Path(project['tasks_path'])
 
-    # Generate next task ID
-    task_id = task_md.get_next_task_id(tasks_path, project_id, category)
+    # Use provided task_id or generate next task ID
+    if not task_id:
+        task_id = task_md.get_next_task_id(tasks_path, project_id, category)
 
     # Generate task data
     task_data = task_md.generate_task_template(

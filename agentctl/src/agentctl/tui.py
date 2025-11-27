@@ -493,7 +493,7 @@ class CreateTaskModal(ModalScreen):
 
         yield Container(
             Label("Create New Task", id="modal-title"),
-            Input(placeholder="Task ID (e.g., RRA-API-0042)", id="task-id"),
+            Input(placeholder="Task ID (optional, e.g., RRA-API-0042)", id="task-id"),
             Input(placeholder="Title", id="task-title"),
             Input(placeholder="Description (optional)", id="task-desc"),
             Select(
@@ -554,8 +554,8 @@ class CreateTaskModal(ModalScreen):
             task_type = self.query_one("#task-type", Input).value
             priority = self.query_one("#task-priority", Select).value
 
-            if not task_id or not title or not project_id:
-                self.app.notify("Task ID, Title, and Project are required", severity="error")
+            if not title or not project_id:
+                self.app.notify("Title and Project are required", severity="error")
                 return
 
             try:
@@ -567,7 +567,15 @@ class CreateTaskModal(ModalScreen):
                 # Check if project uses markdown tasks
                 project = database.get_project(project_id)
                 if project and project.get('tasks_path'):
-                    # Create markdown task (task_id will be auto-generated)
+                    # Markdown tasks: task_id is optional (auto-generated if not provided)
+                    pass
+                elif not task_id:
+                    # Database tasks: task_id is required
+                    self.app.notify("Task ID is required for database tasks", severity="error")
+                    return
+
+                if project and project.get('tasks_path'):
+                    # Create markdown task with user-provided task_id
                     actual_task_id = create_task(
                         project_id=project_id,
                         category=category,
@@ -575,7 +583,8 @@ class CreateTaskModal(ModalScreen):
                         description=description.strip() if description else None,
                         repository_id=final_repo_id,
                         task_type=task_type.strip() or "feature",
-                        priority=priority
+                        priority=priority,
+                        task_id=task_id.strip() if task_id else None
                     )
                     if actual_task_id:
                         self.dismiss(actual_task_id)
