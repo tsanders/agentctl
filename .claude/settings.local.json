@@ -9,7 +9,8 @@
       "Bash(agentctl queue:*)",
       "Bash(agentctl tasks:*)",
       "Bash(agentctl task:*)",
-      "Bash(agentctl agents:*)"
+      "Bash(agentctl agents:*)",
+      "Bash(tmux list-sessions:*)"
     ],
     "deny": [],
     "ask": []

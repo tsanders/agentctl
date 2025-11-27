@@ -1171,22 +1171,9 @@ class TaskManagementScreen(Screen):
             notes = task.get('notes', '')
             notes_preview = notes[:20] + "..." if len(notes) > 20 else (notes or "-")
 
-            # Phase (shortened for table)
-            phase = task.get('phase') or '-'
-            if phase != '-':
-                # Shorten phase names for compact display
-                phase_short = {
-                    'preparation': 'prep',
-                    'registered': 'reg',
-                    'agent_created': 'created',
-                    'initialization': 'init',
-                    'implementation': 'impl',
-                    'agent_review': 'review',
-                    'human_review': 'h-review',
-                    'completed': 'done'
-                }.get(phase, phase[:8])
-            else:
-                phase_short = '-'
+            # Phase (full display name)
+            phase = task.get('phase')
+            phase_display = task_md.get_phase_display_name(phase) if phase else '-'
 
             table.add_row(
                 task['task_id'],
@@ -1195,7 +1182,7 @@ class TaskManagementScreen(Screen):
                 priority_display,
                 category,
                 task_type,
-                phase_short,
+                phase_display,
                 project,
                 agent_display,
                 branch,
