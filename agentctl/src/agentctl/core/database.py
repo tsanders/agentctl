@@ -187,6 +187,46 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_session_errors_task ON session_errors(task_id);
         CREATE INDEX IF NOT EXISTS idx_user_prompts_task ON user_prompts(task_id);
         CREATE INDEX IF NOT EXISTS idx_user_prompts_session ON user_prompts(session_log_id);
+
+        -- Prompt library tables
+        CREATE TABLE IF NOT EXISTS prompts (
+            id TEXT PRIMARY KEY,
+            text TEXT NOT NULL,
+            title TEXT,
+            category TEXT,
+            tags TEXT,
+            phase TEXT,
+            is_bookmarked INTEGER DEFAULT 0,
+            use_count INTEGER DEFAULT 0,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS prompt_history (
+            id TEXT PRIMARY KEY,
+            prompt_id TEXT,
+            prompt_text TEXT NOT NULL,
+            task_id TEXT,
+            phase TEXT,
+            sent_at INTEGER NOT NULL,
+            FOREIGN KEY (prompt_id) REFERENCES prompts(id),
+            FOREIGN KEY (task_id) REFERENCES tasks(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS prompt_workflows (
+            id TEXT PRIMARY KEY,
+            phase TEXT NOT NULL,
+            prompt_id TEXT NOT NULL,
+            order_index INTEGER NOT NULL,
+            FOREIGN KEY (prompt_id) REFERENCES prompts(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_prompts_category ON prompts(category);
+        CREATE INDEX IF NOT EXISTS idx_prompts_phase ON prompts(phase);
+        CREATE INDEX IF NOT EXISTS idx_prompts_bookmarked ON prompts(is_bookmarked);
+        CREATE INDEX IF NOT EXISTS idx_prompt_history_task ON prompt_history(task_id);
+        CREATE INDEX IF NOT EXISTS idx_prompt_history_sent ON prompt_history(sent_at);
+        CREATE INDEX IF NOT EXISTS idx_prompt_workflows_phase ON prompt_workflows(phase);
     """)
 
     conn.commit()
@@ -195,8 +235,9 @@ def init_db():
 
 def get_connection():
     """Get database connection"""
-    if not DB_PATH.exists():
-        init_db()
+    # Always call init_db() - it uses CREATE TABLE IF NOT EXISTS
+    # so it's safe and will add any new tables to existing databases
+    init_db()
 
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row

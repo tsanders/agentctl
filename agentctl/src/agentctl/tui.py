@@ -11,6 +11,7 @@ from pathlib import Path
 
 from agentctl.core import database, task_md
 from agentctl.core import task_store
+from agentctl.core import prompt_store
 from agentctl.core.task import create_task, update_task, delete_task, copy_task_file_to_workdir
 from agentctl.core.tmux import send_keys as tmux_send_keys
 from agentctl.core.agent_monitor import (
@@ -1016,6 +1017,8 @@ class SendPromptModal(ModalScreen):
             prompt = self.query_one("#prompt-input", Input).value
             if prompt:
                 success = tmux_send_keys(self.tmux_session, prompt, enter=True)
+                if success:
+                    prompt_store.add_to_history(prompt, task_id=self.task_id)
                 self.dismiss(("sent", success, prompt))
             else:
                 self.app.notify("Please enter a prompt", severity="warning")
@@ -1023,6 +1026,8 @@ class SendPromptModal(ModalScreen):
             prompt = self.query_one("#prompt-input", Input).value
             if prompt:
                 success = tmux_send_keys(self.tmux_session, prompt, enter=False)
+                if success:
+                    prompt_store.add_to_history(prompt, task_id=self.task_id)
                 self.dismiss(("sent_no_enter", success, prompt))
             else:
                 self.app.notify("Please enter a prompt", severity="warning")
@@ -1031,6 +1036,8 @@ class SendPromptModal(ModalScreen):
         """Handle Enter key in input - send with Enter"""
         if event.value:
             success = tmux_send_keys(self.tmux_session, event.value, enter=True)
+            if success:
+                prompt_store.add_to_history(event.value, task_id=self.task_id)
             self.dismiss(("sent", success, event.value))
 
 
@@ -1083,6 +1090,7 @@ class HelpOverlay(ModalScreen):
   p          Manage projects
   t          Manage tasks
   a          View active agents (tasks with tmux sessions)
+  u          Open prompt library
 """,
             "TaskDetail": """[bold cyan]TASK ACTIONS[/bold cyan]
   s          Start task (create worktree/tmux)
@@ -1132,6 +1140,14 @@ class HelpOverlay(ModalScreen):
 """,
             "Prompts": """[bold cyan]PROMPTS BROWSER[/bold cyan]
   enter      View prompt details
+""",
+            "PromptLibrary": """[bold cyan]PROMPT LIBRARY[/bold cyan]
+  n          Create new prompt
+  e          Edit selected prompt
+  d          Delete selected prompt
+  b          Toggle bookmark
+  f          Cycle filter (all → bookmarked → history)
+  /          Search prompts
 """
         }
 
@@ -1527,9 +1543,12 @@ class TaskManagementScreen(Screen):
         """Handle Enter in the prompt input"""
         if event.input.id == "prompt-input" and event.value:
             tmux_session = getattr(self, '_prompt_tmux_session', None)
+            task_id = getattr(self, '_prompt_task_id', None)
             if tmux_session:
                 success = tmux_send_keys(tmux_session, event.value, enter=True)
                 if success:
+                    # Log to prompt history
+                    prompt_store.add_to_history(event.value, task_id=task_id)
                     preview = event.value[:50] + "..." if len(event.value) > 50 else event.value
                     self.app.notify(f"Sent: {preview}", severity="success")
                 else:
@@ -1667,6 +1686,374 @@ class TaskManagementScreen(Screen):
     def action_show_help(self) -> None:
         """Show help overlay"""
         self.app.push_screen(HelpOverlay("TaskManagement"))
+
+
+class PromptLibraryScreen(Screen):
+    """Screen for managing the prompt library and viewing history"""
+
+    BINDINGS = [
+        ("escape", "go_back", "Back"),
+        ("n", "new_prompt", "New"),
+        ("e", "edit_prompt", "Edit"),
+        ("d", "delete_prompt", "Delete"),
+        ("b", "toggle_bookmark", "Bookmark"),
+        ("f", "toggle_filter", "Filter"),
+        ("j", "cursor_down", "Down"),
+        ("k", "cursor_up", "Up"),
+        ("slash", "search", "Search"),
+        ("question_mark", "show_help", "Help"),
+        ("q", "quit", "Quit"),
+    ]
+
+    def __init__(self):
+        super().__init__()
+        self.filter_mode = "all"  # Options: all, bookmarked, history
+        self.search_term = ""
+        self.prompts_data: List[Dict] = []
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Container(
+            Static("📚 PROMPT LIBRARY", id="prompts-screen-title", classes="screen-title"),
+            Static("", id="filter-status"),
+            DataTable(id="prompts-table"),
+            id="prompts-container"
+        )
+        yield Horizontal(
+            Static("search> ", id="search-label"),
+            Input(placeholder="Type to search prompts (Enter=search, Esc=cancel)", id="search-input"),
+            id="search-bar",
+            classes="prompt-bar-hidden"
+        )
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self.load_prompts()
+
+    def load_prompts(self) -> None:
+        """Load prompts based on current filter"""
+        table = self.query_one("#prompts-table", DataTable)
+        table.clear()
+
+        if len(table.columns) == 0:
+            table.add_columns("★", "Title", "Category", "Phase", "Uses", "Last Used")
+            table.cursor_type = "row"
+
+        # Get prompts based on filter mode
+        if self.filter_mode == "bookmarked":
+            self.prompts_data = prompt_store.list_prompts(is_bookmarked=True, search=self.search_term or None)
+        elif self.filter_mode == "history":
+            # Show recent history entries
+            history = prompt_store.get_recent_prompts(limit=50)
+            self.prompts_data = []
+            for h in history:
+                self.prompts_data.append({
+                    'id': None,
+                    'title': h['text'][:30] + "..." if len(h['text']) > 30 else h['text'],
+                    'text': h['text'],
+                    'category': None,
+                    'phase': None,
+                    'is_bookmarked': False,
+                    'use_count': h['send_count'],
+                    'updated_at': h['last_sent'],
+                })
+        else:
+            self.prompts_data = prompt_store.list_prompts(search=self.search_term or None)
+
+        for prompt in self.prompts_data:
+            bookmark_icon = "★" if prompt.get('is_bookmarked') else " "
+            title = prompt.get('title') or prompt.get('text', '')[:30]
+            title = self._truncate(title, 30)
+            category = prompt.get('category') or "-"
+            phase = prompt.get('phase') or "-"
+            use_count = str(prompt.get('use_count', 0))
+
+            updated = prompt.get('updated_at')
+            if updated:
+                if hasattr(updated, 'strftime'):
+                    last_used = updated.strftime("%Y-%m-%d %H:%M")
+                else:
+                    last_used = str(updated)[:16]
+            else:
+                last_used = "-"
+
+            table.add_row(bookmark_icon, title, category, phase, use_count, last_used)
+
+        # Update filter status
+        filter_status = self.query_one("#filter-status", Static)
+        filter_labels = {
+            "all": "All Prompts",
+            "bookmarked": "★ Bookmarked",
+            "history": "📜 Recent History",
+        }
+        count = len(self.prompts_data)
+        search_info = f" matching '{self.search_term}'" if self.search_term else ""
+        filter_status.update(f"[dim]{filter_labels.get(self.filter_mode, 'All')} ({count} items){search_info}[/dim]")
+
+    def _truncate(self, text: str, max_len: int) -> str:
+        """Truncate text with ellipsis if too long"""
+        if not text:
+            return "-"
+        if len(text) > max_len:
+            return text[:max_len - 1] + "…"
+        return text
+
+    def action_cursor_down(self) -> None:
+        """Move cursor down (vim j)"""
+        table = self.query_one("#prompts-table", DataTable)
+        table.action_cursor_down()
+
+    def action_cursor_up(self) -> None:
+        """Move cursor up (vim k)"""
+        table = self.query_one("#prompts-table", DataTable)
+        table.action_cursor_up()
+
+    def action_go_back(self) -> None:
+        """Return to dashboard"""
+        self.app.pop_screen()
+
+    def action_toggle_filter(self) -> None:
+        """Cycle through filter modes"""
+        filters = ["all", "bookmarked", "history"]
+        current_idx = filters.index(self.filter_mode) if self.filter_mode in filters else 0
+        self.filter_mode = filters[(current_idx + 1) % len(filters)]
+        self.load_prompts()
+        self.app.notify(f"Filter: {self.filter_mode.title()}", severity="information")
+
+    def action_toggle_bookmark(self) -> None:
+        """Toggle bookmark on selected prompt"""
+        table = self.query_one("#prompts-table", DataTable)
+        if table.row_count == 0 or table.cursor_row is None:
+            return
+
+        if table.cursor_row >= len(self.prompts_data):
+            return
+
+        prompt = self.prompts_data[table.cursor_row]
+        prompt_id = prompt.get('id')
+        if not prompt_id:
+            self.app.notify("Cannot bookmark history entry - save it first", severity="warning")
+            return
+
+        new_status = prompt_store.toggle_bookmark(prompt_id)
+        if new_status is not None:
+            icon = "★" if new_status else "☆"
+            self.app.notify(f"{icon} Bookmark {'added' if new_status else 'removed'}", severity="success")
+            self.load_prompts()
+
+    def action_new_prompt(self) -> None:
+        """Create a new prompt in the library"""
+        def handle_result(result):
+            if result:
+                self.load_prompts()
+
+        self.app.push_screen(CreatePromptModal(), handle_result)
+
+    def action_edit_prompt(self) -> None:
+        """Edit selected prompt"""
+        table = self.query_one("#prompts-table", DataTable)
+        if table.row_count == 0 or table.cursor_row is None:
+            return
+
+        if table.cursor_row >= len(self.prompts_data):
+            return
+
+        prompt = self.prompts_data[table.cursor_row]
+        prompt_id = prompt.get('id')
+        if not prompt_id:
+            # For history items, offer to save as new prompt
+            def handle_save(result):
+                if result:
+                    self.load_prompts()
+
+            self.app.push_screen(CreatePromptModal(initial_text=prompt.get('text', '')), handle_save)
+            return
+
+        def handle_result(result):
+            if result:
+                self.load_prompts()
+
+        self.app.push_screen(EditPromptModal(prompt_id), handle_result)
+
+    def action_delete_prompt(self) -> None:
+        """Delete selected prompt"""
+        table = self.query_one("#prompts-table", DataTable)
+        if table.row_count == 0 or table.cursor_row is None:
+            return
+
+        if table.cursor_row >= len(self.prompts_data):
+            return
+
+        prompt = self.prompts_data[table.cursor_row]
+        prompt_id = prompt.get('id')
+        if not prompt_id:
+            self.app.notify("Cannot delete history entry", severity="warning")
+            return
+
+        title = prompt.get('title') or prompt.get('text', '')[:30]
+
+        def handle_delete(confirmed: bool) -> None:
+            if confirmed:
+                if prompt_store.delete_prompt(prompt_id):
+                    self.app.notify(f"Prompt deleted", severity="warning")
+                    self.load_prompts()
+                else:
+                    self.app.notify("Failed to delete prompt", severity="error")
+
+        self.app.push_screen(ConfirmDeleteModal(prompt_id, title), handle_delete)
+
+    def action_search(self) -> None:
+        """Show search bar"""
+        search_bar = self.query_one("#search-bar")
+        search_bar.remove_class("prompt-bar-hidden")
+        search_bar.add_class("prompt-bar-visible")
+        search_input = self.query_one("#search-input", Input)
+        search_input.value = self.search_term
+        search_input.focus()
+
+    def _hide_search_bar(self) -> None:
+        """Hide the search bar"""
+        search_bar = self.query_one("#search-bar")
+        search_bar.remove_class("prompt-bar-visible")
+        search_bar.add_class("prompt-bar-hidden")
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Handle search input"""
+        if event.input.id == "search-input":
+            self.search_term = event.value
+            self._hide_search_bar()
+            self.load_prompts()
+
+    def on_key(self, event) -> None:
+        """Handle Escape to cancel search"""
+        if event.key == "escape":
+            try:
+                search_bar = self.query_one("#search-bar")
+                if "prompt-bar-visible" in search_bar.classes:
+                    self._hide_search_bar()
+                    event.prevent_default()
+                    event.stop()
+            except Exception:
+                pass
+
+    def action_show_help(self) -> None:
+        """Show help overlay"""
+        self.app.push_screen(HelpOverlay("PromptLibrary"))
+
+
+class CreatePromptModal(ModalScreen):
+    """Modal for creating a new prompt in the library"""
+
+    def __init__(self, initial_text: str = ""):
+        super().__init__()
+        self.initial_text = initial_text
+
+    def compose(self) -> ComposeResult:
+        yield Container(
+            Label("📝 New Prompt", id="modal-title"),
+            Static("Title (optional):", classes="detail-row"),
+            Input(placeholder="e.g., Fix failing tests", id="title-input"),
+            Static("Prompt text:", classes="detail-row"),
+            Input(value=self.initial_text, placeholder="Enter the prompt content...", id="text-input"),
+            Static("Category (optional):", classes="detail-row"),
+            Input(placeholder="e.g., debugging, testing, code-review", id="category-input"),
+            Static("Phase (optional):", classes="detail-row"),
+            Input(placeholder="e.g., planning, implementing, testing", id="phase-input"),
+            Container(
+                Button("Save", id="save-btn", variant="success"),
+                Button("Cancel", id="cancel-btn", variant="primary"),
+                classes="button-row"
+            ),
+            id="create-prompt-modal"
+        )
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "cancel-btn":
+            self.dismiss(None)
+        elif event.button.id == "save-btn":
+            text = self.query_one("#text-input", Input).value
+            if not text:
+                self.app.notify("Prompt text is required", severity="warning")
+                return
+
+            title = self.query_one("#title-input", Input).value or None
+            category = self.query_one("#category-input", Input).value or None
+            phase = self.query_one("#phase-input", Input).value or None
+
+            try:
+                prompt_store.create_prompt(
+                    text=text,
+                    title=title,
+                    category=category,
+                    phase=phase,
+                )
+                self.app.notify("Prompt saved to library", severity="success")
+                self.dismiss(True)
+            except Exception as e:
+                self.app.notify(f"Error saving prompt: {e}", severity="error")
+
+
+class EditPromptModal(ModalScreen):
+    """Modal for editing a prompt in the library"""
+
+    def __init__(self, prompt_id: str):
+        super().__init__()
+        self.prompt_id = prompt_id
+        self.prompt_data = None
+
+    def compose(self) -> ComposeResult:
+        self.prompt_data = prompt_store.get_prompt(self.prompt_id)
+        if not self.prompt_data:
+            yield Container(
+                Label("❌ Prompt not found", id="modal-title"),
+                Button("Close", id="cancel-btn", variant="primary"),
+                id="edit-prompt-modal"
+            )
+            return
+
+        yield Container(
+            Label("✏️ Edit Prompt", id="modal-title"),
+            Static("Title (optional):", classes="detail-row"),
+            Input(value=self.prompt_data.get('title') or "", placeholder="e.g., Fix failing tests", id="title-input"),
+            Static("Prompt text:", classes="detail-row"),
+            Input(value=self.prompt_data.get('text', ''), placeholder="Enter the prompt content...", id="text-input"),
+            Static("Category (optional):", classes="detail-row"),
+            Input(value=self.prompt_data.get('category') or "", placeholder="e.g., debugging, testing, code-review", id="category-input"),
+            Static("Phase (optional):", classes="detail-row"),
+            Input(value=self.prompt_data.get('phase') or "", placeholder="e.g., planning, implementing, testing", id="phase-input"),
+            Container(
+                Button("Save", id="save-btn", variant="success"),
+                Button("Cancel", id="cancel-btn", variant="primary"),
+                classes="button-row"
+            ),
+            id="edit-prompt-modal"
+        )
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "cancel-btn":
+            self.dismiss(None)
+        elif event.button.id == "save-btn":
+            text = self.query_one("#text-input", Input).value
+            if not text:
+                self.app.notify("Prompt text is required", severity="warning")
+                return
+
+            title = self.query_one("#title-input", Input).value or None
+            category = self.query_one("#category-input", Input).value or None
+            phase = self.query_one("#phase-input", Input).value or None
+
+            try:
+                prompt_store.update_prompt(
+                    self.prompt_id,
+                    text=text,
+                    title=title,
+                    category=category,
+                    phase=phase,
+                )
+                self.app.notify("Prompt updated", severity="success")
+                self.dismiss(True)
+            except Exception as e:
+                self.app.notify(f"Error updating prompt: {e}", severity="error")
 
 
 class CreateTaskPromptScreen(Screen):
@@ -2001,6 +2388,9 @@ class TaskDetailScreen(Screen):
             if tmux_session:
                 success = tmux_send_keys(tmux_session, event.value, enter=True)
                 if success:
+                    # Log to prompt history with task context
+                    phase = self.task_data.get('phase') if self.task_data else None
+                    prompt_store.add_to_history(event.value, task_id=self.task_id, phase=phase)
                     preview = event.value[:50] + "..." if len(event.value) > 50 else event.value
                     self.app.notify(f"Sent: {preview}", severity="success")
                 else:
@@ -3293,6 +3683,7 @@ class AgentDashboard(App):
         ("p", "manage_projects", "Projects"),
         ("t", "manage_tasks", "Tasks"),
         ("a", "view_active_agents", "Active Agents"),
+        ("u", "view_prompts", "Prompts"),
         ("j", "cursor_down", "Down"),
         ("k", "cursor_up", "Up"),
         ("question_mark", "show_help", "Help"),
@@ -3342,6 +3733,10 @@ class AgentDashboard(App):
     def action_view_analytics(self) -> None:
         """Open analytics screen"""
         self.push_screen(AnalyticsScreen())
+
+    def action_view_prompts(self) -> None:
+        """Open prompt library screen"""
+        self.push_screen(PromptLibraryScreen())
 
     def action_cursor_down(self) -> None:
         """Move cursor down in agents table (vim j)"""
