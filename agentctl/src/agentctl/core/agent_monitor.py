@@ -474,6 +474,7 @@ def get_all_agent_statuses() -> List[Dict]:
         status["task_title"] = task.get("title", "")
         status["task_agent_status"] = task.get("agent_status", "")
         status["project"] = task.get("project_name", task.get("project", ""))
+        status["phase"] = task.get("phase", "")
         status["elapsed"] = task.get("elapsed", "-")
         status["notes"] = task.get("notes", "")
         agents.append(status)

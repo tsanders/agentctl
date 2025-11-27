@@ -21,72 +21,109 @@ from agentctl.core.agent_monitor import (
 class AgentStatusWidget(Static):
     """Widget showing active agents with real-time updates"""
 
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._row_keys: dict[str, any] = {}  # task_id -> row_key mapping
+
     def compose(self) -> ComposeResult:
         yield Static("🤖 ACTIVE AGENTS", classes="widget-title")
         yield DataTable(id="agents-table")
 
     def on_mount(self) -> None:
         table = self.query_one("#agents-table", DataTable)
-        table.add_columns("Task ID", "Health", "Status", "Output Preview")
+        table.add_columns("Task ID", "Health", "Phase", "Status", "Elapsed", "Project")
         table.cursor_type = "row"
         self.update_agents()
         self.set_interval(3, self.update_agents)
 
+    def _truncate(self, text: str, max_len: int) -> str:
+        """Truncate text with ellipsis if too long"""
+        if not text:
+            return "-"
+        if len(text) > max_len:
+            return text[:max_len - 1] + "…"
+        return text
+
+    def _build_row(self, agent: dict, from_tmux: bool = True) -> tuple:
+        """Build a row tuple from agent data"""
+        if from_tmux:
+            health = agent.get('health', 'unknown')
+            health_icon = HEALTH_ICONS.get(health, "⚪")
+            health_display = f"{health_icon} {health.upper()}"
+            task_status = agent.get('task_agent_status', 'unknown')
+            project = agent.get('project', '')
+        else:
+            health_display = "⚪ NO SESSION"
+            task_status = agent.get('agent_status', 'unknown')
+            project = agent.get('project_name', '')
+
+        status_icon = {
+            "running": "🟢",
+            "blocked": "🟡",
+            "failed": "🔴",
+            "paused": "⏸️"
+        }.get(task_status, "⚪")
+
+        return (
+            agent['task_id'],
+            health_display,
+            self._truncate(agent.get('phase', ''), 15),
+            f"{status_icon} {task_status.upper()}",
+            agent.get('elapsed', '-'),
+            self._truncate(project, 20),
+        )
+
     def update_agents(self) -> None:
         """Update agent list with real-time health from tmux monitoring"""
-        # Get real-time agent health from tmux sessions
         agent_statuses = get_all_agent_statuses()
-
         table = self.query_one("#agents-table", DataTable)
-        table.clear()
 
-        if not agent_statuses:
+        # Build list of agents to display
+        agents_to_show = []
+        if agent_statuses:
+            for agent in agent_statuses:
+                agents_to_show.append((agent['task_id'], self._build_row(agent, from_tmux=True)))
+        else:
             # Fall back to task_store for tasks without active tmux sessions
             agents = task_store.get_active_agents()
             for agent in agents:
-                status_icon = {
-                    "running": "🟢",
-                    "blocked": "🟡",
-                    "failed": "🔴",
-                    "paused": "⏸️"
-                }.get(agent['agent_status'], "⚪")
+                agents_to_show.append((agent['task_id'], self._build_row(agent, from_tmux=False)))
 
-                table.add_row(
-                    agent['task_id'],
-                    "⚪ NO SESSION",
-                    f"{status_icon} {agent['agent_status'].upper()}",
-                    "(no tmux session)"
-                )
-            return
+        # Track which task_ids we've seen
+        current_task_ids = set()
 
-        for agent in agent_statuses:
-            health = agent.get('health', 'unknown')
-            health_icon = HEALTH_ICONS.get(health, "⚪")
+        for task_id, row_data in agents_to_show:
+            current_task_ids.add(task_id)
 
-            # Task status icon
-            task_status = agent.get('task_agent_status', 'unknown')
-            status_icon = {
-                "running": "🟢",
-                "blocked": "🟡",
-                "failed": "🔴",
-                "paused": "⏸️"
-            }.get(task_status, "⚪")
+            # Check if row exists in table (by checking row_locations directly)
+            from textual.widgets._data_table import RowKey
+            row_key = RowKey(task_id)
+            row_exists = row_key in table._row_locations
 
-            # Get output preview - last non-empty line, truncated
-            output_preview = agent.get('last_output_preview', '')
-            if not output_preview:
-                recent = agent.get('recent_output', [])
-                non_empty = [line.strip() for line in recent if line.strip()]
-                output_preview = non_empty[-1] if non_empty else "(no output)"
-            if len(output_preview) > 50:
-                output_preview = output_preview[:47] + "..."
+            if row_exists:
+                # Update existing row cell by cell
+                try:
+                    for col_idx, value in enumerate(row_data):
+                        table.update_cell(row_key, table.columns[col_idx].key, value)
+                    self._row_keys[task_id] = row_key
+                except Exception:
+                    pass
+            else:
+                # Add new row
+                try:
+                    new_key = table.add_row(*row_data, key=task_id)
+                    self._row_keys[task_id] = new_key
+                except Exception:
+                    pass
 
-            table.add_row(
-                agent['task_id'],
-                f"{health_icon} {health.upper()}",
-                f"{status_icon} {task_status.upper()}",
-                output_preview
-            )
+        # Remove rows for agents that are no longer active
+        for task_id in list(self._row_keys.keys()):
+            if task_id not in current_task_ids:
+                try:
+                    table.remove_row(self._row_keys[task_id])
+                except Exception:
+                    pass
+                del self._row_keys[task_id]
 
 
 class TaskQueueWidget(Static):
@@ -98,10 +135,18 @@ class TaskQueueWidget(Static):
 
     def on_mount(self) -> None:
         table = self.query_one("#queue-table", DataTable)
-        table.add_columns("#", "Task ID", "Priority", "Category")
+        table.add_columns("#", "Task ID", "Title", "Project", "Priority", "Category", "Type")
         table.cursor_type = "row"
         self.update_queue()
         self.set_interval(10, self.update_queue)
+
+    def _truncate(self, text: str, max_len: int) -> str:
+        """Truncate text with ellipsis if too long"""
+        if not text:
+            return "-"
+        if len(text) > max_len:
+            return text[:max_len - 1] + "…"
+        return text
 
     def update_queue(self) -> None:
         """Update task queue"""
@@ -120,8 +165,11 @@ class TaskQueueWidget(Static):
             table.add_row(
                 str(i),
                 task['id'],
+                self._truncate(task.get('title', ''), 30),
+                self._truncate(task.get('project_name', ''), 15),
                 f"{priority_icon} {task.get('priority', 'medium').upper()}",
-                task.get('category', 'UNKNOWN')
+                task.get('category', 'UNKNOWN'),
+                task.get('type', '-')
             )
 
 
@@ -3097,6 +3145,22 @@ class AgentDashboard(App):
     def action_show_help(self) -> None:
         """Show help overlay"""
         self.push_screen(HelpOverlay("Dashboard"))
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        """Handle row selection - navigate to task detail view"""
+        table_id = event.data_table.id
+        row = event.data_table.get_row_at(event.cursor_row)
+        if not row:
+            return
+
+        if table_id == "agents-table":
+            # Task ID is in column 0
+            task_id = str(row[0])
+            self.push_screen(TaskDetailScreen(task_id))
+        elif table_id == "queue-table":
+            # Task ID is in column 1 (column 0 is row number)
+            task_id = str(row[1])
+            self.push_screen(TaskDetailScreen(task_id))
 
 
 def run_dashboard(open_agents: bool = False):
