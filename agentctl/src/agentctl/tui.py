@@ -2,7 +2,7 @@
 
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical, ScrollableContainer, Center
-from textual.widgets import Header, Footer, Static, DataTable, Log, Button, Input, Label, Select
+from textual.widgets import Header, Footer, Static, DataTable, Log, Button, Input, Label, Select, Rule, Collapsible
 from textual.reactive import reactive
 from textual.screen import Screen, ModalScreen
 from datetime import datetime
@@ -975,11 +975,9 @@ class HelpOverlay(ModalScreen):
         # Screen-specific keybindings
         screen_specific = {
             "Dashboard": """[bold cyan]QUICK ACCESS[/bold cyan]
-  s          View status
   p          Manage projects
   t          Manage tasks
-  a          Monitor agents
-  y          View analytics
+  a          View active agents (tasks with tmux sessions)
 """,
             "TaskDetail": """[bold cyan]TASK ACTIONS[/bold cyan]
   s          Start task (create worktree/tmux)
@@ -995,6 +993,7 @@ class HelpOverlay(ModalScreen):
 
 [bold cyan]AGENT INTERACTION[/bold cyan]
   a          Attach to tmux session
+  t          Toggle tmux output (10 ↔ 100 lines)
   g          Open session in Ghostty
   l          Save session log
   p          View user prompts
@@ -1006,8 +1005,9 @@ class HelpOverlay(ModalScreen):
 """,
             "TaskManagement": """[bold cyan]TASK MANAGEMENT[/bold cyan]
   n          Create new task
-  e          Edit selected task
-  d          Delete selected task
+  f          Cycle filter (all → active agents → running → queued → blocked → completed)
+  a          Toggle active agents filter
+  r          Refresh task list
   enter      View task details
 """,
             "ProjectManagement": """[bold cyan]PROJECT MANAGEMENT[/bold cyan]
@@ -1020,13 +1020,6 @@ class HelpOverlay(ModalScreen):
   e          Edit selected repository
   t          Create task in project
   enter      View task/repo details
-""",
-            "AgentsMonitor": """[bold cyan]AGENT MONITORING[/bold cyan]
-  a          Attach to tmux session
-  g          Open session in Ghostty
-  l          Save session log
-  p          View user prompts
-  enter      View task details
 """,
             "Analytics": """[bold cyan]ANALYTICS[/bold cyan]
   p          View all user prompts
@@ -1180,9 +1173,16 @@ class TaskManagementScreen(Screen):
         ("n", "create_task", "New Task"),
         ("j", "cursor_down", "Down"),
         ("k", "cursor_up", "Up"),
+        ("f", "toggle_filter", "Filter"),
+        ("a", "filter_active", "Active"),
+        ("r", "refresh", "Refresh"),
         ("question_mark", "show_help", "Help"),
         ("q", "quit", "Quit"),
     ]
+
+    def __init__(self):
+        super().__init__()
+        self.filter_mode = "all"  # Options: all, active_agents, running, queued, blocked, completed
 
     def action_cursor_down(self) -> None:
         """Move cursor down (vim j)"""
@@ -1207,7 +1207,7 @@ class TaskManagementScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header()
         yield Container(
-            Static("📋 TASK MANAGEMENT", classes="screen-title"),
+            Static("📋 TASK MANAGEMENT", id="tasks-screen-title", classes="screen-title"),
             DataTable(id="tasks-table"),
             id="tasks-container"
         )
@@ -1226,7 +1226,51 @@ class TaskManagementScreen(Screen):
 
     def load_tasks(self) -> None:
         """Load and display all tasks with full metadata (scroll h/l for more columns)"""
-        tasks = task_store.list_all_tasks()
+        all_tasks = task_store.list_all_tasks()
+
+        # Apply filter
+        if self.filter_mode == "active_agents":
+            tasks = [t for t in all_tasks if t.get('tmux_session')]
+        elif self.filter_mode == "running":
+            tasks = [t for t in all_tasks if t.get('agent_status') == 'running']
+        elif self.filter_mode == "queued":
+            tasks = [t for t in all_tasks if t.get('agent_status') == 'queued']
+        elif self.filter_mode == "blocked":
+            tasks = [t for t in all_tasks if t.get('agent_status') == 'blocked']
+        elif self.filter_mode == "completed":
+            tasks = [t for t in all_tasks if t.get('agent_status') == 'completed']
+        else:  # "all"
+            tasks = all_tasks
+
+        # Check agent health and send desktop notifications
+        # (only when viewing all tasks or active agents to avoid duplicate checks)
+        if self.filter_mode in ["all", "active_agents"]:
+            from agentctl.core.agent_monitor import get_all_agent_statuses, check_and_notify_state_changes
+            agent_statuses = get_all_agent_statuses()
+            check_and_notify_state_changes(agent_statuses)
+
+        # Update title to show current filter
+        title_prefix = "📋 TASK MANAGEMENT"
+        filter_indicators = {
+            "all": "",
+            "active_agents": " - 🤖 ACTIVE AGENTS",
+            "running": " - 🟢 RUNNING",
+            "queued": " - ⚪ QUEUED",
+            "blocked": " - 🟡 BLOCKED",
+            "completed": " - ✅ COMPLETED"
+        }
+        title_text = title_prefix + filter_indicators.get(self.filter_mode, "")
+
+        # Add task count if filtered
+        if self.filter_mode != "all":
+            title_text += f" ({len(tasks)}/{len(all_tasks)})"
+
+        # Update title dynamically
+        try:
+            title_widget = self.query_one("#tasks-screen-title", Static)
+            title_widget.update(title_text)
+        except:
+            pass
 
         table = self.query_one("#tasks-table", DataTable)
 
@@ -1238,8 +1282,8 @@ class TaskManagementScreen(Screen):
         if len(table.columns) == 0:
             # Full columns - use h/l to scroll horizontally
             table.add_columns(
-                "ID", "Title", "Status", "Pri", "Cat", "Type",
-                "Phase", "Project", "Agent", "Branch", "tmux", "Notes"
+                "ID", "Agent", "Title", "Status", "Phase", "Category",
+                "Project", "tmux", "Branch", "Notes"
             )
             table.cursor_type = "row"
 
@@ -1291,16 +1335,14 @@ class TaskManagementScreen(Screen):
 
             table.add_row(
                 task['task_id'],
+                agent_display,
                 task.get('title', '-')[:35],
                 status_display,
-                priority_display,
-                category,
-                task_type,
                 phase_display,
+                category,
                 project,
-                agent_display,
-                branch,
                 tmux_display,
+                branch,
                 notes_preview
             )
 
@@ -1414,6 +1456,27 @@ class TaskManagementScreen(Screen):
                         self.app.notify(f"Error deleting task: {e}", severity="error")
 
             self.app.push_screen(ConfirmDeleteModal(task_id, task_title), handle_delete)
+
+    def action_toggle_filter(self) -> None:
+        """Cycle through filter modes"""
+        filters = ["all", "active_agents", "running", "queued", "blocked", "completed"]
+        current_idx = filters.index(self.filter_mode) if self.filter_mode in filters else 0
+        self.filter_mode = filters[(current_idx + 1) % len(filters)]
+        self.load_tasks()
+        filter_display = self.filter_mode.replace('_', ' ').title()
+        self.app.notify(f"Filter: {filter_display}", severity="information")
+
+    def action_filter_active(self) -> None:
+        """Quick toggle to active agents filter"""
+        self.filter_mode = "active_agents" if self.filter_mode != "active_agents" else "all"
+        self.load_tasks()
+        filter_label = "Active Agents Only" if self.filter_mode == "active_agents" else "All Tasks"
+        self.app.notify(f"Filter: {filter_label}", severity="information")
+
+    def action_refresh(self) -> None:
+        """Manually refresh task list"""
+        self.load_tasks()
+        self.app.notify("Tasks refreshed", severity="information")
 
     def action_show_help(self) -> None:
         """Show help overlay"""
@@ -1636,6 +1699,7 @@ class TaskDetailScreen(Screen):
         ("s", "start_task", "Start"),
         ("a", "attach_tmux", "Attach"),
         ("e", "edit_in_nvim", "Edit"),
+        ("t", "toggle_tmux_output", "tmux↕"),
         ("j", "scroll_down", "Down"),
         ("k", "scroll_up", "Up"),
         ("question_mark", "show_help", "Help"),
@@ -1646,6 +1710,7 @@ class TaskDetailScreen(Screen):
         super().__init__()
         self.task_id = task_id
         self.task_data = None
+        self.tmux_output_expanded = False  # Toggle between 10 and 100 lines
 
     def action_save_session_log(self) -> None:
         """Save the tmux session output to a log file"""
@@ -1662,13 +1727,31 @@ class TaskDetailScreen(Screen):
 
     def action_scroll_down(self) -> None:
         """Scroll down (vim j)"""
-        container = self.query_one("#task-detail-container", Container)
+        container = self.query_one("#task-detail-container", ScrollableContainer)
         container.scroll_down()
 
     def action_scroll_up(self) -> None:
         """Scroll up (vim k)"""
-        container = self.query_one("#task-detail-container", Container)
+        container = self.query_one("#task-detail-container", ScrollableContainer)
         container.scroll_up()
+
+    def action_toggle_tmux_output(self) -> None:
+        """Toggle tmux output between 10 and 100 lines"""
+        self.tmux_output_expanded = not self.tmux_output_expanded
+        line_count = 100 if self.tmux_output_expanded else 10
+
+        # Update tmux content and collapsible state
+        try:
+            tmux_content = self._build_tmux_output_content()
+            self.query_one("#tmux-content", Static).update(tmux_content)
+
+            collapsible = self.query_one("#tmux-collapsible", Collapsible)
+            collapsible.title = f"📺 tmux Output ({line_count} lines) [t]"
+            collapsible.collapsed = False  # Expand when toggling
+        except Exception:
+            pass
+
+        self.app.notify(f"tmux output: {line_count} lines", severity="information")
 
     def action_attach_tmux(self) -> None:
         """Attach to task's tmux session"""
@@ -1697,19 +1780,58 @@ class TaskDetailScreen(Screen):
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield Container(
-            Container(id="task-detail-content"),
+        yield ScrollableContainer(
+            # Header
+            Static("", id="task-header", classes="task-header"),
+
+            # Metadata Section
+            Container(
+                Static("", id="meta-row-1"),
+                Static("", id="meta-row-2"),
+                Static("", id="meta-row-3"),
+                Static("", id="meta-row-4"),
+                Static("", id="meta-row-5"),
+                classes="metadata-section",
+            ),
+
+            # Workflow Section
+            Container(
+                Static("[bold cyan]Workflow Progress[/bold cyan] [dim]([4] next / [5] prev)[/dim]"),
+                Rule(line_style="heavy", classes="-workflow"),
+                Static("", id="workflow-content"),
+                classes="workflow-section",
+            ),
+
+            # tmux Output Section (Collapsible)
+            Container(
+                Collapsible(
+                    Static("", id="tmux-content", classes="tmux-output"),
+                    title="📺 tmux Output",
+                    collapsed=True,
+                    id="tmux-collapsible",
+                ),
+                classes="tmux-section",
+            ),
+
+            # Task Content Section
+            Container(
+                Static("[bold cyan]Task Content[/bold cyan]"),
+                Rule(line_style="heavy"),
+                Static("", id="task-body", classes="task-markdown-content"),
+                classes="content-section",
+            ),
+
             id="task-detail-container"
         )
         yield Footer()
 
     def on_mount(self) -> None:
         self.load_task_details()
-        # Auto-refresh every 2 seconds for agent status updates
-        self.set_interval(2, self.load_task_details)
+        # Auto-refresh every 3 seconds for agent status updates
+        self.set_interval(3, self._refresh_dynamic_content)
 
     def load_task_details(self) -> None:
-        """Load and display comprehensive task information"""
+        """Load and display comprehensive task information (initial load)"""
         self.task_data = task_store.get_task_with_details(self.task_id)
 
         if not self.task_data:
@@ -1717,57 +1839,119 @@ class TaskDetailScreen(Screen):
             self.app.pop_screen()
             return
 
-        container = self.query_one("#task-detail-content", Container)
+        self._update_all_widgets()
 
-        # Remove all existing children to avoid duplicate IDs
-        container.remove_children()
+    def _refresh_dynamic_content(self) -> None:
+        """Refresh only dynamic content (tmux output, agent status) without full reload"""
+        self.task_data = task_store.get_task_with_details(self.task_id)
+        if not self.task_data:
+            return
 
-        # Build compact detail view for mobile
-        desc = self.task_data.get('description') or '-'
-        desc_short = desc[:50] + '...' if len(desc) > 50 else desc
-
-        # Get agent health status if tmux session exists
-        agent_status_line = "Agent: No tmux session"
+        # Update agent health in metadata
         tmux_session = self.task_data.get('tmux_session')
+        agent_health = "[dim]No session[/dim]"
         if tmux_session:
             agent_info = get_agent_status(self.task_id, tmux_session)
             health_display = get_health_display(agent_info['health'])
-            agent_status_line = f"Agent: {health_display}"
+            agent_health = health_display
             if agent_info.get('warnings'):
-                agent_status_line += f" - {', '.join(agent_info['warnings'])}"
-            if agent_info.get('last_output_preview'):
-                agent_status_line += f"\nOutput: {agent_info['last_output_preview']}"
+                agent_health += f" [dim]({', '.join(agent_info['warnings'])})[/dim]"
+
+        # Update status row (includes agent health)
+        status = self.task_data['agent_status']
+        status_display = self._format_status(status)
+        priority = self.task_data['priority']
+        priority_colors = {'high': 'red', 'medium': 'yellow', 'low': 'green'}
+        priority_color = priority_colors.get(priority, 'white')
+
+        try:
+            self.query_one("#meta-row-2", Static).update(
+                f"[cyan][1] Status:[/cyan] {status_display}  │  [cyan][2] Priority:[/cyan] [{priority_color}]{priority.upper()}[/{priority_color}]  │  [cyan][3] Category:[/cyan] {self.task_data['category']}"
+            )
+            self.query_one("#meta-row-3", Static).update(
+                f"[cyan]Type:[/cyan] {self.task_data['type']}  │  [cyan]Agent:[/cyan] {agent_health}"
+            )
+
+            # Update tmux output
+            tmux_content = self._build_tmux_output_content()
+            self.query_one("#tmux-content", Static).update(tmux_content)
+
+            # Update collapsible title
+            line_count = 100 if self.tmux_output_expanded else 10
+            collapsible = self.query_one("#tmux-collapsible", Collapsible)
+            collapsible.title = f"📺 tmux Output ({line_count} lines) [t]"
+        except Exception:
+            pass  # Widget not ready yet
+
+    def _update_all_widgets(self) -> None:
+        """Update all widget content (called on initial load and manual refresh)"""
+        if not self.task_data:
+            return
+
+        # Get agent health status
+        tmux_session = self.task_data.get('tmux_session')
+        agent_health = "[dim]No session[/dim]"
+        if tmux_session:
+            agent_info = get_agent_status(self.task_id, tmux_session)
+            health_display = get_health_display(agent_info['health'])
+            agent_health = health_display
+            if agent_info.get('warnings'):
+                agent_health += f" [dim]({', '.join(agent_info['warnings'])})[/dim]"
 
         # Get markdown body content
         markdown_body = self.task_data.get('_markdown_body', '')
         if markdown_body:
-            # Clean up and format for display
             markdown_body = markdown_body.strip()
         else:
-            markdown_body = "(no content)"
+            markdown_body = "[dim](no content)[/dim]"
 
         # Build workflow progress display
         current_phase = self.task_data.get('phase')
         workflow_display = self._build_workflow_progress(current_phase)
 
-        container.mount(
-            Static(f"📋 {self.task_id}", classes="screen-title"),
-            # Compact single-section layout
-            Static(f"Title: {self.task_data['title']}", classes="detail-row"),
-            Static(f"Project: {self.task_data.get('project_name', '-')} | Repo: {self.task_data.get('repository_name') or '-'}", classes="detail-row"),
-            Static(f"[1] Status: {self._format_status(self.task_data['agent_status'])}", classes="detail-row"),
-            Static(f"[2] Priority: {self.task_data['priority'].upper()} | [3] Category: {self.task_data['category']}", classes="detail-row"),
-            Static(f"Type: {self.task_data['type']}", classes="detail-row"),
-            Static(agent_status_line, classes="detail-row"),
-            Static(f"Branch: {self.task_data.get('git_branch') or '-'} | tmux: {tmux_session or '-'}", classes="detail-row"),
-            Static(f"[n] Notes: {self.task_data.get('notes') or '(none - press n to add)'}", classes="detail-row"),
-            Static("─" * 60, classes="detail-row"),
-            Static("[bold]Workflow Progress ([4] next / [5] prev):[/bold]", classes="detail-row"),
-            Static(workflow_display, classes="detail-row"),
-            Static("─" * 60, classes="detail-row"),
-            Static("[bold]Task Content:[/bold]", classes="detail-row"),
-            Static(markdown_body, classes="task-markdown-content"),
-        )
+        # Build tmux output content
+        tmux_content = self._build_tmux_output_content()
+
+        # Status with color coding
+        status = self.task_data['agent_status']
+        status_display = self._format_status(status)
+
+        # Priority with color
+        priority = self.task_data['priority']
+        priority_colors = {'high': 'red', 'medium': 'yellow', 'low': 'green'}
+        priority_color = priority_colors.get(priority, 'white')
+
+        # Update all widgets by ID
+        try:
+            self.query_one("#task-header", Static).update(
+                f"📋 {self.task_id}: {self.task_data['title']}"
+            )
+            self.query_one("#meta-row-1", Static).update(
+                f"[cyan]Project:[/cyan] {self.task_data.get('project_name', '-')}  │  [cyan]Repo:[/cyan] {self.task_data.get('repository_name') or '-'}"
+            )
+            self.query_one("#meta-row-2", Static).update(
+                f"[cyan][1] Status:[/cyan] {status_display}  │  [cyan][2] Priority:[/cyan] [{priority_color}]{priority.upper()}[/{priority_color}]  │  [cyan][3] Category:[/cyan] {self.task_data['category']}"
+            )
+            self.query_one("#meta-row-3", Static).update(
+                f"[cyan]Type:[/cyan] {self.task_data['type']}  │  [cyan]Agent:[/cyan] {agent_health}"
+            )
+            self.query_one("#meta-row-4", Static).update(
+                f"[cyan]Branch:[/cyan] {self.task_data.get('git_branch') or '[dim]-[/dim]'}  │  [cyan]tmux:[/cyan] {tmux_session or '[dim]-[/dim]'}"
+            )
+            self.query_one("#meta-row-5", Static).update(
+                f"[cyan][n] Notes:[/cyan] {self.task_data.get('notes') or '[dim](press n to add)[/dim]'}"
+            )
+            self.query_one("#workflow-content", Static).update(workflow_display)
+            self.query_one("#tmux-content", Static).update(tmux_content)
+            self.query_one("#task-body", Static).update(markdown_body)
+
+            # Update collapsible title and state
+            line_count = 100 if self.tmux_output_expanded else 10
+            collapsible = self.query_one("#tmux-collapsible", Collapsible)
+            collapsible.title = f"📺 tmux Output ({line_count} lines) [t]"
+            collapsible.collapsed = not self.tmux_output_expanded
+        except Exception:
+            pass  # Widgets not ready yet
 
     def _build_workflow_progress(self, current_phase: Optional[str]) -> str:
         """Build workflow progress display string"""
@@ -1786,6 +1970,41 @@ class TaskDetailScreen(Screen):
                 lines.append(f"○ [dim]{display_name}[/dim]")
 
         return "\n".join(lines)
+
+    def _build_tmux_output_content(self) -> str:
+        """Build tmux output content string for Collapsible widget"""
+        tmux_session = self.task_data.get('tmux_session')
+
+        if not tmux_session:
+            return "[dim]No tmux session for this task[/dim]"
+
+        from agentctl.core.tmux import capture_pane
+
+        # Determine how many lines to show based on toggle state
+        max_lines = 100 if self.tmux_output_expanded else 10
+
+        # Capture more lines than we'll display
+        recent_output = capture_pane(tmux_session, lines=200)
+
+        if not recent_output:
+            return "[dim](session exists but no output captured)[/dim]"
+
+        # Split into lines and get the last N lines (don't filter empty lines)
+        all_lines = recent_output.split('\n')
+        output_lines = all_lines[-max_lines:] if len(all_lines) > max_lines else all_lines
+
+        if not output_lines or (len(output_lines) == 1 and not output_lines[0].strip()):
+            return "[dim](no output)[/dim]"
+
+        # Truncate long lines to prevent layout issues
+        formatted_lines = []
+        for line in output_lines:
+            # Don't skip empty lines, but truncate long ones
+            if len(line) > 120:
+                line = line[:117] + "..."
+            formatted_lines.append(line)
+
+        return "\n".join(formatted_lines)
 
     def _format_status(self, status: str) -> str:
         """Format status with icon"""
@@ -2128,439 +2347,6 @@ class ProjectListScreen(Screen):
             row = table.get_row_at(table.cursor_row)
             project_id = str(row[0])
             self.app.push_screen(ProjectDetailScreen(project_id))
-
-
-class AgentCard(Static):
-    """A card widget displaying a single agent's status and output"""
-
-    def __init__(self, agent_data: Dict, selected: bool = False):
-        super().__init__()
-        self.agent_data = agent_data
-        self.selected = selected
-        self.task_id = agent_data.get("task_id", "")
-
-    def compose(self) -> ComposeResult:
-        yield Static("", id="card-header", classes="agent-card-header")
-
-        # Three-column layout: tmux output | workflow | metadata
-        yield Horizontal(
-            Container(
-                Static("", id="card-output", classes="agent-card-output"),
-                classes="agent-card-left"
-            ),
-            Container(
-                Static("", id="card-workflow", classes="agent-card-workflow"),
-                classes="agent-card-middle"
-            ),
-            Container(
-                Static("", id="card-metadata", classes="agent-card-metadata"),
-                classes="agent-card-right"
-            ),
-            classes="agent-card-content"
-        )
-
-    def on_mount(self) -> None:
-        """Update content after mounting"""
-        self._refresh_content()
-
-    def update_data(self, agent_data: Dict, selected: bool) -> None:
-        """Update the card with new data without remounting"""
-        self.agent_data = agent_data
-        self.selected = selected
-        self._refresh_content()
-        # Update selection styling
-        if selected:
-            self.add_class("agent-card-selected")
-        else:
-            self.remove_class("agent-card-selected")
-
-    def _refresh_content(self) -> None:
-        """Refresh all content in the card"""
-        agent = self.agent_data
-        health_display = get_health_display(agent["health"])
-
-        # Build header
-        selector = "▶ " if self.selected else "  "
-        header = f"{selector}[bold]{agent['task_id']}[/bold] | {health_display} | {agent.get('task_agent_status', '-')}"
-
-        # Build output text
-        recent_lines = agent.get("recent_output", [])
-        non_empty = [line for line in recent_lines if line.strip()][-10:]
-        output_text = "\n".join(non_empty) if non_empty else "(no output)"
-
-        output_lines = []
-        for line in output_text.split("\n"):
-            if len(line) > 80:
-                line = line[:77] + "..."
-            output_lines.append(line)
-        output_text = "\n".join(output_lines)
-
-        # Build workflow progress
-        workflow_text = self._build_workflow_text()
-
-        # Update widgets
-        try:
-            self.query_one("#card-header", Static).update(header)
-            self.query_one("#card-output", Static).update(output_text)
-            self.query_one("#card-workflow", Static).update(workflow_text)
-            self.query_one("#card-metadata", Static).update(self._build_metadata_text())
-        except Exception:
-            pass  # Widget not yet mounted
-
-    def _build_workflow_text(self) -> str:
-        """Build workflow progress text for middle column"""
-        task_id = self.agent_data.get("task_id", "")
-        task = task_store.get_task(task_id) if task_id else {}
-        if not task:
-            return "[dim]No workflow data[/dim]"
-
-        current_phase = task.get("phase")
-        if not current_phase:
-            return "[dim]No phase set[/dim]"
-
-        lines = ["[bold]Workflow:[/bold]"]
-        workflow_lines = self._build_compact_workflow(current_phase)
-        lines.extend(workflow_lines)
-        return "\n".join(lines)
-
-    def _build_metadata_text(self) -> str:
-        """Build the metadata display text for the right panel"""
-        agent = self.agent_data
-        task_id = agent.get("task_id", "")
-
-        # Get full task data for additional metadata
-        task = task_store.get_task(task_id) if task_id else {}
-        if not task:
-            task = {}
-
-        lines = []
-
-        # Title (truncated)
-        title = agent.get("task_title") or task.get("title", "-")
-        if len(title) > 30:
-            title = title[:27] + "..."
-        lines.append(f"[bold]Title:[/bold] {title}")
-
-        # Project
-        project = agent.get("project") or task.get("project_name", "-")
-        lines.append(f"[bold]Project:[/bold] {project}")
-
-        # Category and Type
-        category = task.get("category", "-")
-        task_type = task.get("type", "-")
-        lines.append(f"[bold]Category:[/bold] {category}")
-        lines.append(f"[bold]Type:[/bold] {task_type}")
-
-        # Priority
-        priority = task.get("priority", "-")
-        priority_icon = {"high": "🔴", "medium": "🟡", "low": "🟢"}.get(priority, "")
-        lines.append(f"[bold]Priority:[/bold] {priority_icon} {priority}")
-
-        # Git Branch
-        branch = task.get("git_branch") or "-"
-        if len(branch) > 25:
-            branch = branch[:22] + "..."
-        lines.append(f"[bold]Branch:[/bold] {branch}")
-
-        # Assignee
-        assignee = task.get("assignee", "-")
-        lines.append(f"[bold]Assignee:[/bold] {assignee}")
-
-        # Due date
-        due = task.get("due")
-        if due:
-            lines.append(f"[bold]Due:[/bold] {due}")
-
-        # Notes (if any)
-        notes = agent.get("notes") or task.get("notes", "")
-        if notes:
-            if len(notes) > 30:
-                notes = notes[:27] + "..."
-            lines.append(f"[bold]Notes:[/bold] 📝 {notes}")
-
-        # Elapsed time
-        elapsed = agent.get("elapsed", "-")
-        if elapsed and elapsed != "-":
-            lines.append(f"[bold]Elapsed:[/bold] {elapsed}")
-
-        return "\n".join(lines)
-
-    def _build_compact_workflow(self, current_phase: Optional[str]) -> List[str]:
-        """Build compact workflow progress for agent card"""
-        lines = []
-        for phase in task_md.VALID_PHASE:
-            display_name = task_md.get_phase_display_name(phase)
-
-            # Shorten display names for compact view
-            short_name = display_name[:12]  # Truncate long names
-
-            if phase == current_phase:
-                lines.append(f"▶ {short_name}")
-            elif not current_phase or task_md.VALID_PHASE.index(phase) < task_md.VALID_PHASE.index(current_phase):
-                lines.append(f"✓ [dim]{short_name}[/dim]")
-            else:
-                # Skip future phases in compact view to save space
-                continue
-
-        return lines
-
-    def action_show_help(self) -> None:
-        """Show help overlay"""
-        self.app.push_screen(HelpOverlay("ProjectManagement"))
-
-
-class AgentsMonitorScreen(Screen):
-    """Dedicated screen for monitoring all agents"""
-
-    BINDINGS = [
-        ("escape", "go_back", "Back"),
-        ("enter", "view_task", "View"),
-        ("a", "attach_tmux", "Attach"),
-        ("j", "cursor_down", "Down"),
-        ("k", "cursor_up", "Up"),
-        ("question_mark", "show_help", "Help"),
-        ("q", "quit", "Quit"),
-    ]
-
-    def __init__(self):
-        super().__init__()
-        self.selected_index = 0
-        self.agents_data: List[Dict] = []
-
-    def compose(self) -> ComposeResult:
-        yield Header()
-        yield ScrollableContainer(
-            Static("🤖 ACTIVE AGENTS", classes="screen-title"),
-            Container(id="agents-cards-container"),
-            id="agents-monitor-scroll"
-        )
-        yield Footer()
-
-    def on_mount(self) -> None:
-        self._card_widgets: Dict[str, AgentCard] = {}
-        self.load_agents()
-        # Auto-refresh every 2 seconds
-        self.set_interval(2, self.load_agents)
-
-    def load_agents(self) -> None:
-        """Load and display all agent statuses as cards"""
-        self.agents_data = get_all_agent_statuses()
-
-        # Check for state changes and send desktop notifications
-        check_and_notify_state_changes(self.agents_data)
-
-        container = self.query_one("#agents-cards-container", Container)
-
-        if not self.agents_data:
-            # Only clear if we have cards to remove
-            if self._card_widgets:
-                container.remove_children()
-                self._card_widgets.clear()
-                container.mount(Static("[dim]No agents with tmux sessions found[/dim]"))
-            return
-
-        # Clamp selected index
-        if self.selected_index >= len(self.agents_data):
-            self.selected_index = len(self.agents_data) - 1
-        if self.selected_index < 0:
-            self.selected_index = 0
-
-        # Build set of current task IDs
-        current_task_ids = {agent["task_id"] for agent in self.agents_data}
-
-        # Remove cards for agents that no longer exist
-        for task_id in list(self._card_widgets.keys()):
-            if task_id not in current_task_ids:
-                self._card_widgets[task_id].remove()
-                del self._card_widgets[task_id]
-
-        # Update existing cards or create new ones
-        for i, agent in enumerate(self.agents_data):
-            task_id = agent["task_id"]
-            is_selected = (i == self.selected_index)
-
-            if task_id in self._card_widgets:
-                # Update existing card in place
-                self._card_widgets[task_id].update_data(agent, is_selected)
-            else:
-                # Create new card
-                card = AgentCard(agent, selected=is_selected)
-                card.add_class("agent-card")
-                if is_selected:
-                    card.add_class("agent-card-selected")
-                self._card_widgets[task_id] = card
-                container.mount(card)
-
-    def action_go_back(self) -> None:
-        """Go back to main dashboard"""
-        self.app.pop_screen()
-
-    def action_cursor_down(self) -> None:
-        """Move cursor down (vim j)"""
-        if self.agents_data and self.selected_index < len(self.agents_data) - 1:
-            self.selected_index += 1
-            self.load_agents()
-
-    def action_cursor_up(self) -> None:
-        """Move cursor up (vim k)"""
-        if self.agents_data and self.selected_index > 0:
-            self.selected_index -= 1
-            self.load_agents()
-
-    def action_refresh(self) -> None:
-        """Manually refresh agent list"""
-        self.load_agents()
-        self.app.notify("Agents refreshed", severity="information")
-
-    def action_view_task(self) -> None:
-        """Open task detail for selected agent"""
-        if not self.agents_data:
-            return
-        task_id = self.agents_data[self.selected_index]["task_id"]
-        self.app.push_screen(TaskDetailScreen(task_id))
-
-    def action_attach_tmux(self) -> None:
-        """Attach to selected agent's tmux session"""
-        import subprocess
-        import os
-        from agentctl.core.tmux import session_exists
-
-        if not self.agents_data:
-            self.app.notify("No agent selected", severity="warning")
-            return
-
-        task_id = self.agents_data[self.selected_index]["task_id"]
-
-        # Get task to find tmux session
-        task = task_store.get_task(task_id)
-        if not task:
-            self.app.notify(f"Task {task_id} not found", severity="error")
-            return
-
-        tmux_session = task.get("tmux_session")
-        if not tmux_session:
-            self.app.notify("Task has no tmux session", severity="warning")
-            return
-
-        if not session_exists(tmux_session):
-            self.app.notify(f"Session '{tmux_session}' not found", severity="error")
-            return
-
-        # Check if we're inside tmux already
-        if os.environ.get('TMUX'):
-            # Use switch-client to switch to the target session
-            with self.app.suspend():
-                subprocess.run(["tmux", "switch-client", "-t", tmux_session])
-        else:
-            # Not in tmux, use regular attach
-            with self.app.suspend():
-                subprocess.run(["tmux", "attach", "-t", tmux_session])
-
-    def action_open_ghostty(self) -> None:
-        """Open selected agent's tmux session in a new Ghostty window"""
-        import subprocess
-        import platform
-        from agentctl.core.tmux import session_exists
-
-        if not self.agents_data:
-            self.app.notify("No agent selected", severity="warning")
-            return
-
-        agent = self.agents_data[self.selected_index]
-        task_id = agent["task_id"]
-        tmux_session = agent.get("tmux_session")
-
-        if not tmux_session:
-            # Try getting from task data
-            task = task_store.get_task(task_id)
-            if task:
-                tmux_session = task.get("tmux_session")
-
-        if not tmux_session:
-            self.app.notify("Task has no tmux session", severity="warning")
-            return
-
-        if not session_exists(tmux_session):
-            self.app.notify(f"Session '{tmux_session}' not found", severity="error")
-            return
-
-        try:
-            if platform.system() == "Darwin":
-                # macOS: Use open command with Ghostty's -e flag to run command
-                subprocess.Popen(
-                    ["open", "-na", "/Applications/Ghostty.app", "--args",
-                     "-e", "tmux", "attach", "-t", tmux_session],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    start_new_session=True
-                )
-            else:
-                # Linux: Use ghostty +new-window action
-                subprocess.Popen(
-                    ["ghostty", "+new-window", "-e", "tmux", "attach", "-t", tmux_session],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    start_new_session=True
-                )
-            self.app.notify(f"Opened {tmux_session} in Ghostty", severity="success")
-        except FileNotFoundError:
-            self.app.notify("Ghostty not found. Install from ghostty.org", severity="error")
-        except Exception as e:
-            self.app.notify(f"Failed to open Ghostty: {e}", severity="error")
-
-    def action_save_session_log(self) -> None:
-        """Save the selected agent's tmux session to a log file"""
-        if not self.agents_data:
-            self.app.notify("No agent selected", severity="warning")
-            return
-
-        agent = self.agents_data[self.selected_index]
-        task_id = agent["task_id"]
-        tmux_session = agent.get("tmux_session")
-
-        if not tmux_session:
-            self.app.notify("No tmux session for this agent", severity="warning")
-            return
-
-        filepath = save_session_log(task_id, tmux_session)
-        if filepath:
-            self.app.notify(f"Session saved: {filepath}", severity="success")
-        else:
-            self.app.notify("Failed to capture session", severity="error")
-
-    def action_view_prompts(self) -> None:
-        """View user prompts for the selected agent's session"""
-        if not self.agents_data:
-            self.app.notify("No agent selected", severity="warning")
-            return
-
-        agent = self.agents_data[self.selected_index]
-        task_id = agent["task_id"]
-        tmux_session = agent.get("tmux_session")
-
-        # Check if we have prompts in the database for this task
-        prompts = database.get_user_prompts(task_id=task_id, limit=1)
-
-        if prompts:
-            # We have stored prompts, show them
-            self.app.push_screen(UserPromptsScreen(task_id=task_id))
-        else:
-            # No stored prompts - try to capture and parse the current session
-            if not tmux_session:
-                self.app.notify("No session data. Use 'l' to capture session first.", severity="warning")
-                return
-
-            # Capture session and parse it
-            filepath = save_session_log(task_id, tmux_session)
-            if filepath:
-                # Now show the prompts
-                self.app.push_screen(UserPromptsScreen(task_id=task_id))
-            else:
-                self.app.notify("Failed to capture session", severity="error")
-
-    def action_show_help(self) -> None:
-        """Show help overlay"""
-        self.app.push_screen(HelpOverlay("AgentsMonitor"))
 
 
 class UserPromptsScreen(Screen):
@@ -2991,7 +2777,15 @@ class AgentDashboard(App):
 
     #task-detail-content {
         height: auto;
-        padding: 0;
+        padding: 0 1;
+    }
+
+    #task-detail-content > Static {
+        height: auto;
+    }
+
+    #task-detail-content > Container {
+        height: auto;
     }
 
     .detail-section {
@@ -3130,12 +2924,98 @@ class AgentDashboard(App):
         background: $boost;
         padding: 0 1;
     }
+
+    /* Task Detail Screen - Section styling (shrink-to-fit) */
+    .task-header {
+        background: $primary;
+        color: $text;
+        text-style: bold;
+        padding: 0 1;
+        text-align: center;
+        height: auto;
+    }
+
+    .metadata-section {
+        border: solid $accent;
+        border-title-color: $accent;
+        border-title-style: bold;
+        margin-bottom: 1;
+        padding: 0 1;
+        height: auto;
+    }
+
+    .workflow-section {
+        border: solid $success;
+        border-title-color: $success;
+        border-title-style: bold;
+        margin-bottom: 1;
+        padding: 0 1;
+        height: auto;
+    }
+
+    .tmux-section {
+        border: solid $warning;
+        border-title-color: $warning;
+        border-title-style: bold;
+        margin-bottom: 1;
+        padding: 0;
+        height: auto;
+    }
+
+    .tmux-section Collapsible {
+        padding: 0;
+        height: auto;
+    }
+
+    .tmux-section CollapsibleTitle {
+        background: $warning 20%;
+        color: $text;
+        padding: 0 1;
+    }
+
+    .tmux-output {
+        padding: 0 1;
+        color: $text-muted;
+        background: $surface-darken-1;
+        height: auto;
+    }
+
+    .content-section {
+        border: solid $primary;
+        border-title-color: $primary;
+        border-title-style: bold;
+        margin: 0;
+        padding: 0 1;
+        height: auto;
+    }
+
+    .section-label {
+        color: $text-muted;
+    }
+
+    .section-value {
+        color: $text;
+    }
+
+    Rule {
+        margin: 0;
+        color: $primary-darken-2;
+        height: 1;
+    }
+
+    Rule.-workflow {
+        color: $success;
+    }
+
+    Rule.-tmux {
+        color: $warning;
+    }
     """
 
     BINDINGS = [
         ("p", "manage_projects", "Projects"),
         ("t", "manage_tasks", "Tasks"),
-        ("a", "monitor_agents", "Agents"),
+        ("a", "view_active_agents", "Active Agents"),
         ("j", "cursor_down", "Down"),
         ("k", "cursor_up", "Up"),
         ("question_mark", "show_help", "Help"),
@@ -3176,9 +3056,11 @@ class AgentDashboard(App):
         """Open tasks management screen"""
         self.push_screen(TaskManagementScreen())
 
-    def action_monitor_agents(self) -> None:
-        """Open agents monitor screen"""
-        self.push_screen(AgentsMonitorScreen())
+    def action_view_active_agents(self) -> None:
+        """Open tasks screen filtered to active agents"""
+        screen = TaskManagementScreen()
+        screen.filter_mode = "active_agents"
+        self.push_screen(screen)
 
     def action_view_analytics(self) -> None:
         """Open analytics screen"""
@@ -3221,9 +3103,11 @@ def run_dashboard(open_agents: bool = False):
     """Run the dashboard application
 
     Args:
-        open_agents: If True, open directly to agents monitor screen
+        open_agents: If True, open directly to tasks screen with active agents filter
     """
     app = AgentDashboard()
     if open_agents:
-        app.push_screen(AgentsMonitorScreen())
+        screen = TaskManagementScreen()
+        screen.filter_mode = "active_agents"
+        app.push_screen(screen)
     app.run()

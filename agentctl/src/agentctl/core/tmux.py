@@ -93,6 +93,7 @@ def capture_pane(session_name: str, lines: int = 100) -> Optional[str]:
     try:
         # Use cmd to capture pane content with history
         captured = pane.cmd('capture-pane', '-p', '-S', f'-{lines}')
-        return captured.stdout[0] if captured.stdout else None
+        # stdout is a list of lines - join them back together
+        return '\n'.join(captured.stdout) if captured.stdout else None
     except Exception:
         return None
