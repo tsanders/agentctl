@@ -1098,9 +1098,7 @@ class HelpOverlay(ModalScreen):
   d          Delete task
 
 [bold cyan]TASK PROPERTIES[/bold cyan]
-  1          Cycle status
-  2          Cycle priority
-  3          Cycle category
+  1-3        Send suggested prompt (if configured)
   4          Advance to next phase
   5          Go to previous phase
 
@@ -1112,7 +1110,7 @@ class HelpOverlay(ModalScreen):
   p          Send prompt to agent
 
 [bold cyan]PROMPT BAR (when open)[/bold cyan]
-  ↑/↓        Browse prompt history
+  ↑/↓        Browse prompt history (bookmarks first)
   Ctrl+r     Open prompt library to select
   Enter      Send prompt
   Escape     Cancel
@@ -1158,6 +1156,7 @@ class HelpOverlay(ModalScreen):
   e          Edit selected prompt
   d          Delete selected prompt
   b          Toggle bookmark
+  w          Configure workflow phases
   f          Cycle filter (all → bookmarked → history)
   /          Search prompts
 """
@@ -1537,9 +1536,22 @@ class TaskManagementScreen(Screen):
         self._prompt_task_id = task_id
         self._prompt_tmux_session = tmux_session
 
-        # Load recent prompt history for navigation
+        # Load bookmarked prompts first, then recent history
+        bookmarked = prompt_store.get_bookmarked_prompts(limit=10)
         recent = prompt_store.get_recent_prompts(limit=20)
-        self._prompt_history = [p['text'] for p in recent]
+
+        # Combine: bookmarked first, then history (deduplicated)
+        self._prompt_history = []
+        seen_texts = set()
+        for p in bookmarked:
+            if p['text'] not in seen_texts:
+                self._prompt_history.append(p['text'])
+                seen_texts.add(p['text'])
+        for p in recent:
+            if p['text'] not in seen_texts:
+                self._prompt_history.append(p['text'])
+                seen_texts.add(p['text'])
+
         self._history_index = -1
         self._current_input = ""
 
@@ -1771,6 +1783,99 @@ class TaskManagementScreen(Screen):
         self.app.push_screen(HelpOverlay("TaskManagement"))
 
 
+class WorkflowConfigModal(ModalScreen):
+    """Modal for configuring prompt-to-phase workflow mappings"""
+
+    def __init__(self, prompt_id: str, prompt_title: str):
+        super().__init__()
+        self.prompt_id = prompt_id
+        self.prompt_title = prompt_title
+        self.current_phases: List[str] = []
+
+    def compose(self) -> ComposeResult:
+        # Get phases this prompt is currently assigned to
+        for phase in task_md.VALID_PHASE:
+            if prompt_store.is_prompt_in_workflow(self.prompt_id, phase):
+                self.current_phases.append(phase)
+
+        yield Container(
+            Label(f"⚙️ Workflow: {self.prompt_title[:30]}", id="modal-title"),
+            Static("Select phases where this prompt should be suggested:", classes="detail-row"),
+            DataTable(id="phase-table"),
+            Static("[dim]Space/Enter to toggle, Esc to close[/dim]", classes="detail-row"),
+            Container(
+                Button("Done", id="done-btn", variant="success"),
+                classes="button-row"
+            ),
+            id="workflow-config-modal"
+        )
+
+    def on_mount(self) -> None:
+        table = self.query_one("#phase-table", DataTable)
+        table.add_columns("Enabled", "Phase")
+        table.cursor_type = "row"
+
+        for phase in task_md.VALID_PHASE:
+            enabled = "✓" if phase in self.current_phases else ""
+            display_name = task_md.get_phase_display_name(phase)
+            table.add_row(enabled, display_name, key=phase)
+
+        table.focus()
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        """Toggle phase assignment on Enter/Space"""
+        self._toggle_selected_phase()
+
+    def _toggle_selected_phase(self) -> None:
+        """Toggle the currently selected phase"""
+        table = self.query_one("#phase-table", DataTable)
+        if table.cursor_row is None:
+            return
+
+        phase = task_md.VALID_PHASE[table.cursor_row]
+
+        if phase in self.current_phases:
+            # Remove from workflow
+            prompt_store.remove_prompt_from_workflow(self.prompt_id, phase)
+            self.current_phases.remove(phase)
+            self.app.notify(f"Removed from {phase}", severity="information")
+        else:
+            # Add to workflow
+            prompt_store.add_prompt_to_workflow(self.prompt_id, phase)
+            self.current_phases.append(phase)
+            self.app.notify(f"Added to {phase}", severity="success")
+
+        # Refresh table
+        self._refresh_table()
+
+    def _refresh_table(self) -> None:
+        """Refresh the table display"""
+        table = self.query_one("#phase-table", DataTable)
+        cursor_row = table.cursor_row
+        table.clear()
+
+        for phase in task_md.VALID_PHASE:
+            enabled = "✓" if phase in self.current_phases else ""
+            display_name = task_md.get_phase_display_name(phase)
+            table.add_row(enabled, display_name, key=phase)
+
+        # Restore cursor position
+        if cursor_row is not None and cursor_row < table.row_count:
+            table.move_cursor(row=cursor_row)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "done-btn":
+            self.dismiss(True)
+
+    def on_key(self, event) -> None:
+        if event.key == "escape":
+            self.dismiss(True)
+        elif event.key == "space":
+            self._toggle_selected_phase()
+            event.prevent_default()
+            event.stop()
+
+
 class PromptLibraryScreen(Screen):
     """Screen for managing the prompt library and viewing history"""
 
@@ -1781,6 +1886,7 @@ class PromptLibraryScreen(Screen):
         ("e", "edit_prompt", "Edit"),
         ("d", "delete_prompt", "Delete"),
         ("b", "toggle_bookmark", "Bookmark"),
+        ("w", "configure_workflow", "Workflow"),
         ("f", "toggle_filter", "Filter"),
         ("j", "cursor_down", "Down"),
         ("k", "cursor_up", "Up"),
@@ -1968,6 +2074,31 @@ class PromptLibraryScreen(Screen):
             self.app.notify(f"{icon} Bookmark {'added' if new_status else 'removed'}", severity="success")
             self.load_prompts()
 
+    def action_configure_workflow(self) -> None:
+        """Configure which workflow phases this prompt appears in"""
+        table = self.query_one("#prompts-table", DataTable)
+        if table.row_count == 0 or table.cursor_row is None:
+            return
+
+        if table.cursor_row >= len(self.prompts_data):
+            return
+
+        prompt = self.prompts_data[table.cursor_row]
+        prompt_id = prompt.get('id')
+
+        if not prompt_id:
+            # History entry - need to save first
+            self.app.notify("Save prompt to library first (press 'b' to bookmark)", severity="warning")
+            return
+
+        prompt_title = prompt.get('title') or prompt['text'][:30]
+
+        def handle_result(result):
+            if result:
+                self.load_prompts()
+
+        self.app.push_screen(WorkflowConfigModal(prompt_id, prompt_title), handle_result)
+
     def action_new_prompt(self) -> None:
         """Create a new prompt in the library"""
         def handle_result(result):
@@ -2084,6 +2215,8 @@ class CreatePromptModal(ModalScreen):
             Input(value=self.initial_text, placeholder="Enter the prompt content...", id="text-input"),
             Static("Category (optional):", classes="detail-row"),
             Input(placeholder="e.g., debugging, testing, code-review", id="category-input"),
+            Static("Tags (optional):", classes="detail-row"),
+            Input(placeholder="e.g., python, api, refactor (comma-separated)", id="tags-input"),
             Static("Phase (optional):", classes="detail-row"),
             Input(placeholder="e.g., planning, implementing, testing", id="phase-input"),
             Container(
@@ -2105,6 +2238,7 @@ class CreatePromptModal(ModalScreen):
 
             title = self.query_one("#title-input", Input).value or None
             category = self.query_one("#category-input", Input).value or None
+            tags = self.query_one("#tags-input", Input).value or None
             phase = self.query_one("#phase-input", Input).value or None
 
             try:
@@ -2112,6 +2246,7 @@ class CreatePromptModal(ModalScreen):
                     text=text,
                     title=title,
                     category=category,
+                    tags=tags,
                     phase=phase,
                 )
                 self.app.notify("Prompt saved to library", severity="success")
@@ -2146,6 +2281,8 @@ class EditPromptModal(ModalScreen):
             Input(value=self.prompt_data.get('text', ''), placeholder="Enter the prompt content...", id="text-input"),
             Static("Category (optional):", classes="detail-row"),
             Input(value=self.prompt_data.get('category') or "", placeholder="e.g., debugging, testing, code-review", id="category-input"),
+            Static("Tags (optional):", classes="detail-row"),
+            Input(value=self.prompt_data.get('tags') or "", placeholder="e.g., python, api, refactor (comma-separated)", id="tags-input"),
             Static("Phase (optional):", classes="detail-row"),
             Input(value=self.prompt_data.get('phase') or "", placeholder="e.g., planning, implementing, testing", id="phase-input"),
             Container(
@@ -2167,6 +2304,7 @@ class EditPromptModal(ModalScreen):
 
             title = self.query_one("#title-input", Input).value or None
             category = self.query_one("#category-input", Input).value or None
+            tags = self.query_one("#tags-input", Input).value or None
             phase = self.query_one("#phase-input", Input).value or None
 
             try:
@@ -2175,6 +2313,7 @@ class EditPromptModal(ModalScreen):
                     text=text,
                     title=title,
                     category=category,
+                    tags=tags,
                     phase=phase,
                 )
                 self.app.notify("Prompt updated", severity="success")
@@ -2403,6 +2542,11 @@ class TaskDetailScreen(Screen):
         ("t", "toggle_tmux_output", "tmux↕"),
         ("j", "scroll_down", "Down"),
         ("k", "scroll_up", "Up"),
+        ("1", "send_suggestion_1", "Suggest 1"),
+        ("2", "send_suggestion_2", "Suggest 2"),
+        ("3", "send_suggestion_3", "Suggest 3"),
+        ("4", "advance_phase", "Next Phase"),
+        ("5", "regress_phase", "Prev Phase"),
         ("question_mark", "show_help", "Help"),
         ("q", "quit", "Quit"),
     ]
@@ -2416,6 +2560,8 @@ class TaskDetailScreen(Screen):
         self._prompt_history: List[str] = []
         self._history_index: int = -1  # -1 means not browsing history
         self._current_input: str = ""  # Store current input when browsing history
+        # Suggested prompts for current phase
+        self._suggested_prompts: List[Dict] = []
 
     def action_save_session_log(self) -> None:
         """Save the tmux session output to a log file"""
@@ -2496,9 +2642,22 @@ class TaskDetailScreen(Screen):
             self.app.notify(f"Session '{tmux_session}' not found", severity="error")
             return
 
-        # Load recent prompt history for navigation
+        # Load bookmarked prompts first, then recent history
+        bookmarked = prompt_store.get_bookmarked_prompts(limit=10)
         recent = prompt_store.get_recent_prompts(limit=20)
-        self._prompt_history = [p['text'] for p in recent]
+
+        # Combine: bookmarked first, then history (deduplicated)
+        self._prompt_history = []
+        seen_texts = set()
+        for p in bookmarked:
+            if p['text'] not in seen_texts:
+                self._prompt_history.append(p['text'])
+                seen_texts.add(p['text'])
+        for p in recent:
+            if p['text'] not in seen_texts:
+                self._prompt_history.append(p['text'])
+                seen_texts.add(p['text'])
+
         self._history_index = -1
         self._current_input = ""
 
@@ -2520,6 +2679,47 @@ class TaskDetailScreen(Screen):
         # Reset history navigation state
         self._history_index = -1
         self._current_input = ""
+
+    def _send_suggestion(self, index: int) -> None:
+        """Send a suggested prompt by index (0-2)"""
+        from agentctl.core.tmux import send_keys as tmux_send_keys, session_exists
+
+        if index >= len(self._suggested_prompts):
+            self.app.notify("No suggestion at that position", severity="warning")
+            return
+
+        tmux_session = self.task_data.get('tmux_session') if self.task_data else None
+        if not tmux_session:
+            self.app.notify("No tmux session for this task", severity="warning")
+            return
+
+        if not session_exists(tmux_session):
+            self.app.notify(f"Session '{tmux_session}' not found", severity="error")
+            return
+
+        prompt = self._suggested_prompts[index]
+        prompt_text = prompt['text']
+
+        success = tmux_send_keys(tmux_session, prompt_text, enter=True)
+        if success:
+            phase = self.task_data.get('phase') if self.task_data else None
+            prompt_store.add_to_history(prompt_text, task_id=self.task_id, phase=phase)
+            preview = prompt_text[:40] + "..." if len(prompt_text) > 40 else prompt_text
+            self.app.notify(f"✓ {preview}", severity="success")
+        else:
+            self.app.notify("Failed to send prompt", severity="error")
+
+    def action_send_suggestion_1(self) -> None:
+        """Send first suggested prompt"""
+        self._send_suggestion(0)
+
+    def action_send_suggestion_2(self) -> None:
+        """Send second suggested prompt"""
+        self._send_suggestion(1)
+
+    def action_send_suggestion_3(self) -> None:
+        """Send third suggested prompt"""
+        self._send_suggestion(2)
 
     def _navigate_history(self, direction: int) -> None:
         """Navigate through prompt history. direction: -1 for older, +1 for newer"""
@@ -2629,6 +2829,14 @@ class TaskDetailScreen(Screen):
                 Rule(line_style="heavy", classes="-workflow"),
                 Static("", id="workflow-content"),
                 classes="workflow-section",
+            ),
+
+            # Suggested Prompts Section
+            Container(
+                Static("", id="suggestions-header"),
+                Static("", id="suggestions-content"),
+                id="suggestions-section",
+                classes="suggestions-section",
             ),
 
             # tmux Output Section (Collapsible)
@@ -2744,6 +2952,20 @@ class TaskDetailScreen(Screen):
         current_phase = self.task_data.get('phase')
         workflow_display = self._build_workflow_progress(current_phase)
 
+        # Load suggested prompts for current phase
+        self._suggested_prompts = []
+        suggestions_header = ""
+        suggestions_content = ""
+        if current_phase:
+            self._suggested_prompts = prompt_store.get_workflow_prompts(current_phase)
+            if self._suggested_prompts:
+                suggestions_header = f"[bold cyan]Suggested for {current_phase}[/bold cyan] [dim](1-3 to send)[/dim]"
+                suggestion_lines = []
+                for i, prompt in enumerate(self._suggested_prompts[:3]):
+                    title = prompt.get('title') or prompt['text'][:40]
+                    suggestion_lines.append(f"  [yellow][{i+1}][/yellow] {title}")
+                suggestions_content = "\n".join(suggestion_lines)
+
         # Build tmux output content
         tmux_content = self._build_tmux_output_content()
 
@@ -2777,6 +2999,11 @@ class TaskDetailScreen(Screen):
                 f"[cyan][n] Notes:[/cyan] {self.task_data.get('notes') or '[dim](press n to add)[/dim]'}"
             )
             self.query_one("#workflow-content", Static).update(workflow_display)
+            self.query_one("#suggestions-header", Static).update(suggestions_header)
+            self.query_one("#suggestions-content", Static).update(suggestions_content)
+            # Hide suggestions section if empty
+            suggestions_section = self.query_one("#suggestions-section", Container)
+            suggestions_section.display = bool(self._suggested_prompts)
             self.query_one("#tmux-content", Static).update(tmux_content)
             self.query_one("#task-body", Static).update(markdown_body)
 

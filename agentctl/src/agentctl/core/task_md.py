@@ -26,6 +26,8 @@ VALID_PHASE = [
     'implementation',   # Active development with TDD
     'agent_review',     # Automated code review agent running
     'human_review',     # Awaiting human review/PR
+    'integration_merge', # Merging changes to main branch
+    'adhoc_testing',    # Manual/exploratory testing
     'completed'         # Merged and done
 ]
 
@@ -305,6 +307,8 @@ def get_phase_display_name(phase: Optional[str]) -> str:
         'implementation': 'Implementation',
         'agent_review': 'Agent Review',
         'human_review': 'Human Review',
+        'integration_merge': 'Integration Merge',
+        'adhoc_testing': 'Ad-Hoc Testing',
         'completed': 'Completed'
     }
     return phase_names.get(phase, phase.title())

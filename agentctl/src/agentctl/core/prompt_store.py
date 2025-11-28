@@ -502,3 +502,131 @@ def _row_to_history(row) -> Dict:
         'prompt_title': row.get('prompt_title'),
         'prompt_category': row.get('prompt_category'),
     }
+
+
+# Workflow operations
+
+def get_workflow_prompts(phase: str) -> List[Dict]:
+    """Get prompts configured for a specific workflow phase.
+
+    Args:
+        phase: The workflow phase (e.g., "planning", "implementing", "testing")
+
+    Returns:
+        List of prompt dictionaries ordered by order_index
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT p.*, pw.order_index
+        FROM prompt_workflows pw
+        JOIN prompts p ON pw.prompt_id = p.id
+        WHERE pw.phase = ?
+        ORDER BY pw.order_index
+    """, (phase,))
+
+    prompts = [_row_to_prompt(row) for row in cursor.fetchall()]
+    conn.close()
+
+    return prompts
+
+
+def add_prompt_to_workflow(prompt_id: str, phase: str, order_index: Optional[int] = None) -> str:
+    """Add a prompt to a workflow phase.
+
+    Args:
+        prompt_id: The prompt ID
+        phase: The workflow phase
+        order_index: Optional order index (defaults to next available)
+
+    Returns:
+        The workflow entry ID
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    # Get next order_index if not specified
+    if order_index is None:
+        cursor.execute("""
+            SELECT COALESCE(MAX(order_index), -1) + 1 FROM prompt_workflows WHERE phase = ?
+        """, (phase,))
+        order_index = cursor.fetchone()[0]
+
+    workflow_id = str(uuid.uuid4())
+
+    cursor.execute("""
+        INSERT INTO prompt_workflows (id, phase, prompt_id, order_index)
+        VALUES (?, ?, ?, ?)
+    """, (workflow_id, phase, prompt_id, order_index))
+
+    conn.commit()
+    conn.close()
+
+    return workflow_id
+
+
+def remove_prompt_from_workflow(prompt_id: str, phase: str) -> bool:
+    """Remove a prompt from a workflow phase.
+
+    Args:
+        prompt_id: The prompt ID
+        phase: The workflow phase
+
+    Returns:
+        True if removed, False if not found
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        DELETE FROM prompt_workflows WHERE prompt_id = ? AND phase = ?
+    """, (prompt_id, phase))
+
+    deleted = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+
+    return deleted
+
+
+def get_workflow_phases() -> List[str]:
+    """Get all phases that have workflow prompts configured.
+
+    Returns:
+        List of phase names
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT DISTINCT phase FROM prompt_workflows ORDER BY phase
+    """)
+
+    phases = [row['phase'] for row in cursor.fetchall()]
+    conn.close()
+
+    return phases
+
+
+def is_prompt_in_workflow(prompt_id: str, phase: str) -> bool:
+    """Check if a prompt is in a workflow phase.
+
+    Args:
+        prompt_id: The prompt ID
+        phase: The workflow phase
+
+    Returns:
+        True if prompt is in the workflow phase
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        SELECT 1 FROM prompt_workflows WHERE prompt_id = ? AND phase = ?
+    """, (prompt_id, phase))
+
+    exists = cursor.fetchone() is not None
+    conn.close()
+
+    return exists
