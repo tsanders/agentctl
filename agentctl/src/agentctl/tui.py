@@ -1946,8 +1946,20 @@ class PromptLibraryScreen(Screen):
 
         prompt = self.prompts_data[table.cursor_row]
         prompt_id = prompt.get('id')
+
         if not prompt_id:
-            self.app.notify("Cannot bookmark history entry - save it first", severity="warning")
+            # History entry - save to library first, then bookmark
+            prompt_text = prompt.get('text', '')
+            if not prompt_text:
+                return
+            # Create prompt with bookmark already set
+            new_id = prompt_store.create_prompt(
+                text=prompt_text,
+                title=prompt_text[:30] + "..." if len(prompt_text) > 30 else prompt_text,
+                is_bookmarked=True
+            )
+            self.app.notify("★ Saved to library and bookmarked", severity="success")
+            self.load_prompts()
             return
 
         new_status = prompt_store.toggle_bookmark(prompt_id)
