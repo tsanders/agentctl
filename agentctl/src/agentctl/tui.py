@@ -1109,7 +1109,13 @@ class HelpOverlay(ModalScreen):
   t          Toggle tmux output (10 ↔ 100 lines)
   g          Open session in Ghostty
   l          Save session log
-  p          View user prompts
+  p          Send prompt to agent
+
+[bold cyan]PROMPT BAR (when open)[/bold cyan]
+  ↑/↓        Browse prompt history
+  Ctrl+r     Open prompt library to select
+  Enter      Send prompt
+  Escape     Cancel
 
 [bold cyan]EDITING[/bold cyan]
   e          Edit task file in nvim
@@ -1118,10 +1124,16 @@ class HelpOverlay(ModalScreen):
 """,
             "TaskManagement": """[bold cyan]TASK MANAGEMENT[/bold cyan]
   n          Create new task
+  p          Send prompt to selected task
   f          Cycle filter (all → active agents → running → queued → blocked → completed)
   a          Toggle active agents filter
   r          Refresh task list
   enter      View task details
+
+[bold cyan]PROMPT BAR (when open)[/bold cyan]
+  ↑/↓        Browse prompt history
+  Enter      Send prompt
+  Escape     Cancel
 """,
             "ProjectManagement": """[bold cyan]PROJECT MANAGEMENT[/bold cyan]
   n          Create new project
@@ -1305,6 +1317,10 @@ class TaskManagementScreen(Screen):
     def __init__(self):
         super().__init__()
         self.filter_mode = "all"  # Options: all, active_agents, running, queued, blocked, completed
+        # Prompt history navigation state
+        self._prompt_history: List[str] = []
+        self._history_index: int = -1  # -1 means not browsing history
+        self._current_input: str = ""  # Store current input when browsing history
 
     def action_cursor_down(self) -> None:
         """Move cursor down (vim j)"""
@@ -1521,6 +1537,12 @@ class TaskManagementScreen(Screen):
         self._prompt_task_id = task_id
         self._prompt_tmux_session = tmux_session
 
+        # Load recent prompt history for navigation
+        recent = prompt_store.get_recent_prompts(limit=20)
+        self._prompt_history = [p['text'] for p in recent]
+        self._history_index = -1
+        self._current_input = ""
+
         # Show the prompt bar and focus the input
         prompt_bar = self.query_one("#prompt-bar")
         prompt_bar.remove_class("prompt-bar-hidden")
@@ -1538,6 +1560,39 @@ class TaskManagementScreen(Screen):
         prompt_input.value = ""
         self._prompt_task_id = None
         self._prompt_tmux_session = None
+        # Reset history navigation state
+        self._history_index = -1
+        self._current_input = ""
+
+    def _navigate_history(self, direction: int) -> None:
+        """Navigate through prompt history. direction: -1 for older, +1 for newer"""
+        prompt_input = self.query_one("#prompt-input", Input)
+
+        if not self._prompt_history:
+            return
+
+        # Save current input when starting to browse history
+        if self._history_index == -1 and direction == -1:
+            self._current_input = prompt_input.value
+
+        new_index = self._history_index + direction
+
+        if new_index < -1:
+            new_index = -1
+        elif new_index >= len(self._prompt_history):
+            new_index = len(self._prompt_history) - 1
+
+        self._history_index = new_index
+
+        if self._history_index == -1:
+            # Back to current input
+            prompt_input.value = self._current_input
+        else:
+            # Show history item
+            prompt_input.value = self._prompt_history[self._history_index]
+
+        # Move cursor to end
+        prompt_input.cursor_position = len(prompt_input.value)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Handle Enter in the prompt input"""
@@ -1549,23 +1604,51 @@ class TaskManagementScreen(Screen):
                 if success:
                     # Log to prompt history
                     prompt_store.add_to_history(event.value, task_id=task_id)
-                    preview = event.value[:50] + "..." if len(event.value) > 50 else event.value
-                    self.app.notify(f"Sent: {preview}", severity="success")
+                    preview = event.value[:40] + "..." if len(event.value) > 40 else event.value
+                    self.app.notify(f"✓ {preview} [u=library]", severity="success")
                 else:
                     self.app.notify("Failed to send prompt", severity="error")
             self._hide_prompt_bar()
 
     def on_key(self, event) -> None:
-        """Handle Escape to cancel prompt input"""
-        if event.key == "escape":
-            try:
-                prompt_bar = self.query_one("#prompt-bar")
-                if "prompt-bar-visible" in prompt_bar.classes:
-                    self._hide_prompt_bar()
-                    event.prevent_default()
-                    event.stop()
-            except Exception:
-                pass
+        """Handle special keys in prompt input"""
+        try:
+            prompt_bar = self.query_one("#prompt-bar")
+            if "prompt-bar-visible" not in prompt_bar.classes:
+                return
+
+            if event.key == "escape":
+                self._hide_prompt_bar()
+                event.prevent_default()
+                event.stop()
+            elif event.key == "up":
+                # Navigate to older history
+                self._navigate_history(-1)
+                event.prevent_default()
+                event.stop()
+            elif event.key == "down":
+                # Navigate to newer history
+                self._navigate_history(1)
+                event.prevent_default()
+                event.stop()
+            elif event.key == "ctrl+r":
+                # Open prompt library for selection
+                self._open_prompt_selector()
+                event.prevent_default()
+                event.stop()
+        except Exception:
+            pass
+
+    def _open_prompt_selector(self) -> None:
+        """Open PromptLibraryScreen for selecting a prompt"""
+        def handle_selection(selected_text: Optional[str]) -> None:
+            if selected_text:
+                prompt_input = self.query_one("#prompt-input", Input)
+                prompt_input.value = selected_text
+                prompt_input.cursor_position = len(selected_text)
+                prompt_input.focus()
+
+        self.app.push_screen(PromptLibraryScreen(select_mode=True), handle_selection)
 
     def _build_repository_comment(self, project_id: str) -> str:
         """Build a helpful comment showing available repositories"""
@@ -1693,6 +1776,7 @@ class PromptLibraryScreen(Screen):
 
     BINDINGS = [
         ("escape", "go_back", "Back"),
+        ("enter", "select_prompt", "Select"),
         ("n", "new_prompt", "New"),
         ("e", "edit_prompt", "Edit"),
         ("d", "delete_prompt", "Delete"),
@@ -1705,16 +1789,18 @@ class PromptLibraryScreen(Screen):
         ("q", "quit", "Quit"),
     ]
 
-    def __init__(self):
+    def __init__(self, select_mode: bool = False):
         super().__init__()
-        self.filter_mode = "all"  # Options: all, bookmarked, history
+        self.select_mode = select_mode  # If True, Enter returns selected prompt
+        self.filter_mode = "history" if select_mode else "all"  # Start with history in select mode
         self.search_term = ""
         self.prompts_data: List[Dict] = []
 
     def compose(self) -> ComposeResult:
+        title = "🔍 SELECT PROMPT (Enter=select, Esc=cancel)" if self.select_mode else "📚 PROMPT LIBRARY"
         yield Header()
         yield Container(
-            Static("📚 PROMPT LIBRARY", id="prompts-screen-title", classes="screen-title"),
+            Static(title, id="prompts-screen-title", classes="screen-title"),
             Static("", id="filter-status"),
             DataTable(id="prompts-table"),
             id="prompts-container"
@@ -1729,6 +1815,13 @@ class PromptLibraryScreen(Screen):
 
     def on_mount(self) -> None:
         self.load_prompts()
+        # Focus table so Enter key works immediately
+        table = self.query_one("#prompts-table", DataTable)
+        table.focus()
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        """Handle DataTable row selection (Enter key on a row)"""
+        self.action_select_prompt()
 
     def load_prompts(self) -> None:
         """Load prompts based on current filter"""
@@ -1809,8 +1902,30 @@ class PromptLibraryScreen(Screen):
         table.action_cursor_up()
 
     def action_go_back(self) -> None:
-        """Return to dashboard"""
-        self.app.pop_screen()
+        """Return to previous screen"""
+        if self.select_mode:
+            self.dismiss(None)  # Return None to indicate cancellation
+        else:
+            self.app.pop_screen()
+
+    def action_select_prompt(self) -> None:
+        """Select the current prompt (in select mode, returns to caller)"""
+        table = self.query_one("#prompts-table", DataTable)
+        if table.row_count == 0 or table.cursor_row is None:
+            return
+
+        if table.cursor_row >= len(self.prompts_data):
+            return
+
+        prompt = self.prompts_data[table.cursor_row]
+        prompt_text = prompt.get('text', '')
+
+        if self.select_mode:
+            # Return the selected prompt text
+            self.dismiss(prompt_text)
+        else:
+            # Normal mode - could open detail view or do nothing
+            pass
 
     def action_toggle_filter(self) -> None:
         """Cycle through filter modes"""
@@ -2285,6 +2400,10 @@ class TaskDetailScreen(Screen):
         self.task_id = task_id
         self.task_data = None
         self.tmux_output_expanded = False  # Toggle between 10 and 100 lines
+        # Prompt history navigation state
+        self._prompt_history: List[str] = []
+        self._history_index: int = -1  # -1 means not browsing history
+        self._current_input: str = ""  # Store current input when browsing history
 
     def action_save_session_log(self) -> None:
         """Save the tmux session output to a log file"""
@@ -2365,6 +2484,12 @@ class TaskDetailScreen(Screen):
             self.app.notify(f"Session '{tmux_session}' not found", severity="error")
             return
 
+        # Load recent prompt history for navigation
+        recent = prompt_store.get_recent_prompts(limit=20)
+        self._prompt_history = [p['text'] for p in recent]
+        self._history_index = -1
+        self._current_input = ""
+
         # Show the prompt bar and focus the input
         prompt_bar = self.query_one("#prompt-bar")
         prompt_bar.remove_class("prompt-bar-hidden")
@@ -2380,6 +2505,39 @@ class TaskDetailScreen(Screen):
         prompt_bar.add_class("prompt-bar-hidden")
         prompt_input = self.query_one("#prompt-input", Input)
         prompt_input.value = ""
+        # Reset history navigation state
+        self._history_index = -1
+        self._current_input = ""
+
+    def _navigate_history(self, direction: int) -> None:
+        """Navigate through prompt history. direction: -1 for older, +1 for newer"""
+        prompt_input = self.query_one("#prompt-input", Input)
+
+        if not self._prompt_history:
+            return
+
+        # Save current input when starting to browse history
+        if self._history_index == -1 and direction == -1:
+            self._current_input = prompt_input.value
+
+        new_index = self._history_index + direction
+
+        if new_index < -1:
+            new_index = -1
+        elif new_index >= len(self._prompt_history):
+            new_index = len(self._prompt_history) - 1
+
+        self._history_index = new_index
+
+        if self._history_index == -1:
+            # Back to current input
+            prompt_input.value = self._current_input
+        else:
+            # Show history item
+            prompt_input.value = self._prompt_history[self._history_index]
+
+        # Move cursor to end
+        prompt_input.cursor_position = len(prompt_input.value)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         """Handle Enter in the prompt input"""
@@ -2391,20 +2549,51 @@ class TaskDetailScreen(Screen):
                     # Log to prompt history with task context
                     phase = self.task_data.get('phase') if self.task_data else None
                     prompt_store.add_to_history(event.value, task_id=self.task_id, phase=phase)
-                    preview = event.value[:50] + "..." if len(event.value) > 50 else event.value
-                    self.app.notify(f"Sent: {preview}", severity="success")
+                    preview = event.value[:40] + "..." if len(event.value) > 40 else event.value
+                    self.app.notify(f"✓ {preview} [u=library]", severity="success")
                 else:
                     self.app.notify("Failed to send prompt", severity="error")
             self._hide_prompt_bar()
 
     def on_key(self, event) -> None:
-        """Handle Escape to cancel prompt input"""
-        if event.key == "escape":
+        """Handle special keys in prompt input"""
+        try:
             prompt_bar = self.query_one("#prompt-bar")
-            if "prompt-bar-visible" in prompt_bar.classes:
+            if "prompt-bar-visible" not in prompt_bar.classes:
+                return
+
+            if event.key == "escape":
                 self._hide_prompt_bar()
                 event.prevent_default()
                 event.stop()
+            elif event.key == "up":
+                # Navigate to older history
+                self._navigate_history(-1)
+                event.prevent_default()
+                event.stop()
+            elif event.key == "down":
+                # Navigate to newer history
+                self._navigate_history(1)
+                event.prevent_default()
+                event.stop()
+            elif event.key == "ctrl+r":
+                # Open prompt library for selection
+                self._open_prompt_selector()
+                event.prevent_default()
+                event.stop()
+        except Exception:
+            pass
+
+    def _open_prompt_selector(self) -> None:
+        """Open PromptLibraryScreen for selecting a prompt"""
+        def handle_selection(selected_text: Optional[str]) -> None:
+            if selected_text:
+                prompt_input = self.query_one("#prompt-input", Input)
+                prompt_input.value = selected_text
+                prompt_input.cursor_position = len(selected_text)
+                prompt_input.focus()
+
+        self.app.push_screen(PromptLibraryScreen(select_mode=True), handle_selection)
 
     def compose(self) -> ComposeResult:
         yield Header()
