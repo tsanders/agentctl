@@ -462,6 +462,11 @@ def get_all_agent_statuses() -> List[Dict]:
         if not tmux_session:
             continue
 
+        # Skip completed/failed tasks - they're done
+        agent_status = task.get("agent_status", "")
+        if agent_status in ("completed", "failed"):
+            continue
+
         # Auto-detect and update phase if needed
         task_id = task["task_id"]
         updated_phase = check_and_update_phase(task_id)

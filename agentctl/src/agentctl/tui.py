@@ -1098,7 +1098,9 @@ class HelpOverlay(ModalScreen):
   d          Delete task
 
 [bold cyan]TASK PROPERTIES[/bold cyan]
-  1-3        Send suggested prompt (if configured)
+  1          Send suggestion 1 / Cycle status
+  2          Send suggestion 2 / Cycle priority
+  3          Send suggestion 3 / Cycle category
   4          Advance to next phase
   5          Go to previous phase
 
@@ -2710,16 +2712,25 @@ class TaskDetailScreen(Screen):
             self.app.notify("Failed to send prompt", severity="error")
 
     def action_send_suggestion_1(self) -> None:
-        """Send first suggested prompt"""
-        self._send_suggestion(0)
+        """Send first suggested prompt, or cycle status if no suggestions"""
+        if self._suggested_prompts:
+            self._send_suggestion(0)
+        else:
+            self.action_cycle_status()
 
     def action_send_suggestion_2(self) -> None:
-        """Send second suggested prompt"""
-        self._send_suggestion(1)
+        """Send second suggested prompt, or cycle priority if no suggestions"""
+        if len(self._suggested_prompts) >= 2:
+            self._send_suggestion(1)
+        else:
+            self.action_cycle_priority()
 
     def action_send_suggestion_3(self) -> None:
-        """Send third suggested prompt"""
-        self._send_suggestion(2)
+        """Send third suggested prompt, or cycle category if no suggestions"""
+        if len(self._suggested_prompts) >= 3:
+            self._send_suggestion(2)
+        else:
+            self.action_cycle_category()
 
     def _navigate_history(self, direction: int) -> None:
         """Navigate through prompt history. direction: -1 for older, +1 for newer"""
