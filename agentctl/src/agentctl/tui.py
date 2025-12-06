@@ -1178,6 +1178,9 @@ class ProjectDetailScreen(Screen):
     BINDINGS = [
         ("escape", "go_back", "Back"),
         ("t", "create_task", "Create Task"),
+        ("r", "add_repo", "Add Repo"),
+        ("e", "edit_repo", "Edit Repo"),
+        ("tab", "switch_table", "Switch Table"),
         ("j", "cursor_down", "Down"),
         ("k", "cursor_up", "Up"),
         ("question_mark", "show_help", "Help"),
@@ -1200,6 +1203,15 @@ class ProjectDetailScreen(Screen):
         table_id = "#repos-table" if self.active_table == "repos" else "#tasks-table"
         table = self.query_one(table_id, DataTable)
         table.action_cursor_up()
+
+    def action_switch_table(self) -> None:
+        """Switch focus between repos and tasks tables"""
+        if self.active_table == "repos":
+            self.active_table = "tasks"
+            self.query_one("#tasks-table", DataTable).focus()
+        else:
+            self.active_table = "repos"
+            self.query_one("#repos-table", DataTable).focus()
 
     def compose(self) -> ComposeResult:
         yield Header()
