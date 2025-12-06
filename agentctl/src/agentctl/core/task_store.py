@@ -204,9 +204,18 @@ def get_queued_tasks() -> List[Dict]:
 
     # Sort by priority (high > medium > low) then by created_at
     priority_order = {'high': 0, 'medium': 1, 'low': 2}
+
+    def normalize_created_at(val):
+        """Normalize created_at to string for consistent sorting"""
+        if val is None:
+            return ''
+        if hasattr(val, 'isoformat'):  # datetime object
+            return val.isoformat()
+        return str(val)
+
     tasks.sort(key=lambda t: (
         priority_order.get(t.get('priority', 'medium'), 1),
-        t.get('created_at', '')
+        normalize_created_at(t.get('created_at'))
     ))
 
     return tasks
