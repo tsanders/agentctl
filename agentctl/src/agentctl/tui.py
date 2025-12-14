@@ -1255,6 +1255,8 @@ class ProjectDetailScreen(Screen):
     def load_tasks(self) -> None:
         """Load and display tasks for this project"""
         tasks = task_store.query_tasks(project=self.project_id)
+        # Sort by task ID
+        tasks = sorted(tasks, key=lambda t: t.get('task_id', ''))
 
         table = self.query_one("#tasks-table", DataTable)
         table.clear()
@@ -1398,6 +1400,9 @@ class TaskManagementScreen(Screen):
             tasks = [t for t in all_tasks if t.get('agent_status') == 'completed']
         else:  # "all"
             tasks = all_tasks
+
+        # Sort by task ID
+        tasks = sorted(tasks, key=lambda t: t.get('task_id', ''))
 
         # Check agent health and send desktop notifications
         # (only when viewing all tasks or active agents to avoid duplicate checks)
