@@ -11,7 +11,8 @@ from typing import Dict, List, Optional
 import libtmux
 
 from .task_store import list_all_tasks
-from .tmux import get_server, session_exists
+from .tmux import get_server, session_exists, list_windows, capture_window_pane
+from .config import get_window_name, get_window_role
 
 # Health state constants
 HEALTH_ACTIVE = "active"
@@ -412,6 +413,152 @@ def detect_health_state(session_info: Dict) -> Dict:
         "warnings": [],
         "last_meaningful_line": last_meaningful,
     }
+
+
+def generate_smart_summary(output: str, role: Optional[str] = None) -> str:
+    """Generate a smart summary from output text.
+
+    Args:
+        output: Recent output text
+        role: Optional window role for context
+
+    Returns:
+        Human-readable summary string
+    """
+    output_lower = output.lower()
+
+    # Test patterns
+    if any(p in output_lower for p in ["pytest", "jest", "mocha", "running tests", "test_"]):
+        if "passed" in output_lower or "ok" in output_lower:
+            return "Tests passing"
+        elif "failed" in output_lower or "error" in output_lower:
+            return "Tests failing"
+        return "Running tests..."
+
+    # Build patterns
+    if any(p in output_lower for p in ["building", "compiling", "webpack", "vite", "tsc"]):
+        return "Building..."
+
+    # Review patterns (for reviewer role)
+    if role == "reviewer" or any(p in output_lower for p in ["reviewing", "diff", "changes"]):
+        if "lgtm" in output_lower or "approved" in output_lower:
+            return "Review: Approved"
+        return "Reviewing..."
+
+    # Git patterns
+    if "git push" in output_lower:
+        return "Pushing changes..."
+    if "git commit" in output_lower:
+        return "Committing..."
+
+    # Claude Code patterns
+    if "esc to interrupt" in output_lower:
+        return "Working..."
+
+    return "Active"
+
+
+def get_window_status(session_name: str, window: int, task_id: Optional[str] = None) -> Dict:
+    """Get health status for a specific window.
+
+    Args:
+        session_name: The tmux session name
+        window: Window index
+        task_id: Optional task ID for window naming
+
+    Returns:
+        Dict with health, icon, summary, index, name
+    """
+    # Check if window exists
+    windows = list_windows(session_name)
+    window_exists = any(w["index"] == window for w in windows)
+
+    if not window_exists:
+        return {
+            "index": window,
+            "name": get_window_name(task_id, window),
+            "health": HEALTH_EXITED,
+            "icon": HEALTH_ICONS[HEALTH_EXITED],
+            "summary": "Window not found",
+        }
+
+    # Capture output from this window
+    output = capture_window_pane(session_name, window=window, lines=100)
+
+    if not output:
+        return {
+            "index": window,
+            "name": get_window_name(task_id, window),
+            "health": HEALTH_IDLE,
+            "icon": HEALTH_ICONS[HEALTH_IDLE],
+            "summary": "(no output)",
+        }
+
+    # Analyze output for health
+    recent_lines = output.split('\n')
+    non_empty = [line for line in recent_lines if line.strip()]
+    recent_text = "\n".join(recent_lines[-20:])
+
+    # Determine health state
+    health = HEALTH_IDLE
+    summary = ""
+
+    if ACTIVE_PATTERN in recent_text.lower():
+        health = HEALTH_ACTIVE
+        summary = generate_smart_summary(recent_text, get_window_role(task_id, window))
+    else:
+        for pattern in INPUT_PATTERNS:
+            if re.search(pattern, recent_text, re.IGNORECASE):
+                health = HEALTH_WAITING
+                # Extract the prompt line
+                for line in reversed(non_empty):
+                    if re.search(pattern, line, re.IGNORECASE):
+                        summary = f'Waiting: "{line[:40]}..."' if len(line) > 40 else f'Waiting: "{line}"'
+                        break
+                break
+
+        if health == HEALTH_IDLE:
+            for pattern in ERROR_PATTERNS:
+                if re.search(pattern, recent_text):
+                    health = HEALTH_ERROR
+                    summary = "Error detected"
+                    break
+
+    # Default summary if not set
+    if not summary and non_empty:
+        last_line = non_empty[-1]
+        summary = last_line[:50] + "..." if len(last_line) > 50 else last_line
+
+    return {
+        "index": window,
+        "name": get_window_name(task_id, window),
+        "health": health,
+        "icon": HEALTH_ICONS[health],
+        "summary": summary or "(idle)",
+    }
+
+
+def get_all_window_statuses(session_name: str, task_id: Optional[str] = None) -> List[Dict]:
+    """Get status for all windows in a session.
+
+    Args:
+        session_name: The tmux session name
+        task_id: Optional task ID for window naming
+
+    Returns:
+        List of window status dicts
+    """
+    windows = list_windows(session_name)
+
+    if not windows:
+        return []
+
+    statuses = []
+    for window in windows:
+        status = get_window_status(session_name, window["index"], task_id)
+        statuses.append(status)
+
+    return statuses
 
 
 def get_agent_status(task_id: str, tmux_session: str) -> Dict:

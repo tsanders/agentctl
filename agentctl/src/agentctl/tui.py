@@ -15,8 +15,8 @@ from agentctl.core import prompt_store
 from agentctl.core.task import create_task, update_task, delete_task, copy_task_file_to_workdir
 from agentctl.core.tmux import send_keys as tmux_send_keys
 from agentctl.core.agent_monitor import (
-    get_agent_status, get_all_agent_statuses, get_health_display, HEALTH_ICONS,
-    check_and_notify_state_changes, save_session_log
+    get_agent_status, get_all_agent_statuses, get_all_window_statuses,
+    get_health_display, HEALTH_ICONS, check_and_notify_state_changes, save_session_log
 )
 
 
@@ -49,9 +49,28 @@ class AgentStatusWidget(Static):
     def _build_row(self, agent: dict, from_tmux: bool = True) -> tuple:
         """Build a row tuple from agent data"""
         if from_tmux:
-            health = agent.get('health', 'unknown')
-            health_icon = HEALTH_ICONS.get(health, "⚪")
-            health_display = f"{health_icon} {health.upper()}"
+            # Get multi-window status if available
+            tmux_session = agent.get('tmux_session')
+            task_id = agent.get('task_id')
+            if tmux_session:
+                window_statuses = get_all_window_statuses(tmux_session, task_id)
+                if len(window_statuses) > 1:
+                    # Multi-window: show inline icons "🟢 Claude 🟡 Codex"
+                    health_display = " ".join(
+                        f"{w['icon']} {w['name']}" for w in window_statuses
+                    )
+                elif window_statuses:
+                    # Single window: show traditional format
+                    w = window_statuses[0]
+                    health_display = f"{w['icon']} {w['summary'][:20]}"
+                else:
+                    health = agent.get('health', 'unknown')
+                    health_icon = HEALTH_ICONS.get(health, "⚪")
+                    health_display = f"{health_icon} {health.upper()}"
+            else:
+                health = agent.get('health', 'unknown')
+                health_icon = HEALTH_ICONS.get(health, "⚪")
+                health_display = f"{health_icon} {health.upper()}"
             task_status = agent.get('task_agent_status', 'unknown')
             project = agent.get('project', '')
         else:
@@ -2549,6 +2568,40 @@ Press ESC to go back""")
             self.dismiss(False)
 
 
+class WindowPickerModal(ModalScreen):
+    """Modal for selecting which window to send a prompt to"""
+
+    BINDINGS = [("escape", "cancel", "Cancel")]
+
+    def __init__(self, windows: List[Dict]):
+        super().__init__()
+        self.windows = windows
+
+    def compose(self) -> ComposeResult:
+        yield Container(
+            Static("[bold cyan]Select Window[/bold cyan]", classes="modal-title"),
+            DataTable(id="windows-table"),
+            Static("[dim]Enter to select, Escape to cancel[/dim]", classes="modal-hint"),
+            id="window-picker-container",
+            classes="modal-container"
+        )
+
+    def on_mount(self) -> None:
+        table = self.query_one("#windows-table", DataTable)
+        table.add_columns("#", "Window", "Status")
+        table.cursor_type = "row"
+
+        for i, w in enumerate(self.windows):
+            table.add_row(str(i), f"{w['name']} ({w['index']})", f"{w['icon']} {w['summary'][:30]}")
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        """Handle Enter on a row"""
+        self.dismiss(self.windows[event.cursor_row]["index"])
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
 class TaskDetailScreen(Screen):
     """Screen showing comprehensive task details and actions"""
 
@@ -2557,8 +2610,10 @@ class TaskDetailScreen(Screen):
         ("s", "start_task", "Start"),
         ("a", "attach_tmux", "Attach"),
         ("p", "send_prompt", "Prompt"),
+        ("P", "prompt_with_picker", "Prompt→Win"),
         ("e", "edit_in_nvim", "Edit"),
         ("t", "toggle_tmux_output", "tmux↕"),
+        ("w", "switch_window", "Switch Win"),
         ("j", "scroll_down", "Down"),
         ("k", "scroll_up", "Up"),
         ("1", "send_suggestion_1", "Suggest 1"),
@@ -2581,6 +2636,10 @@ class TaskDetailScreen(Screen):
         self._current_input: str = ""  # Store current input when browsing history
         # Suggested prompts for current phase
         self._suggested_prompts: List[Dict] = []
+        # Multi-window tracking
+        self.selected_window: int = 0  # Currently selected window index
+        self._window_statuses: List[Dict] = []  # Cached window statuses
+        self._prompt_target_window: Optional[int] = None  # Target window for prompt
 
     def action_save_session_log(self) -> None:
         """Save the tmux session output to a log file"""
@@ -2699,6 +2758,35 @@ class TaskDetailScreen(Screen):
         self._history_index = -1
         self._current_input = ""
 
+    def action_prompt_with_picker(self) -> None:
+        """Show window picker, then prompt input (P key)"""
+        from agentctl.core.tmux import session_exists
+
+        tmux_session = self.task_data.get('tmux_session') if self.task_data else None
+        if not tmux_session:
+            self.app.notify("No tmux session for this task", severity="warning")
+            return
+
+        if not session_exists(tmux_session):
+            self.app.notify(f"Session '{tmux_session}' not found", severity="error")
+            return
+
+        if not self._window_statuses:
+            # Refresh window statuses
+            self._update_windows_display()
+
+        if not self._window_statuses or len(self._window_statuses) < 2:
+            # Only one window, just use regular prompt
+            self.action_send_prompt()
+            return
+
+        def handle_window_selection(window_index: Optional[int]) -> None:
+            if window_index is not None:
+                self._prompt_target_window = window_index
+                self.action_send_prompt()
+
+        self.app.push_screen(WindowPickerModal(self._window_statuses), handle_window_selection)
+
     def _send_suggestion(self, index: int) -> None:
         """Send a suggested prompt by index (0-2)"""
         from agentctl.core.tmux import send_keys as tmux_send_keys, session_exists
@@ -2784,15 +2872,19 @@ class TaskDetailScreen(Screen):
         if event.input.id == "prompt-input" and event.value:
             tmux_session = self.task_data.get('tmux_session') if self.task_data else None
             if tmux_session:
-                success = tmux_send_keys(tmux_session, event.value, enter=True)
+                # Use target window if set, otherwise use selected window
+                target_window = self._prompt_target_window if self._prompt_target_window is not None else self.selected_window
+                success = tmux_send_keys(tmux_session, event.value, enter=True, window=target_window)
                 if success:
                     # Log to prompt history with task context
                     phase = self.task_data.get('phase') if self.task_data else None
                     prompt_store.add_to_history(event.value, task_id=self.task_id, phase=phase)
-                    preview = event.value[:40] + "..." if len(event.value) > 40 else event.value
-                    self.app.notify(f"✓ {preview} [u=library]", severity="success")
+                    window_name = self._window_statuses[target_window]["name"] if self._window_statuses and target_window < len(self._window_statuses) else f"Window {target_window}"
+                    preview = event.value[:30] + "..." if len(event.value) > 30 else event.value
+                    self.app.notify(f"✓ [{window_name}] {preview}", severity="success")
                 else:
                     self.app.notify("Failed to send prompt", severity="error")
+                self._prompt_target_window = None  # Reset after use
             self._hide_prompt_bar()
 
     def on_key(self, event) -> None:
@@ -2865,6 +2957,15 @@ class TaskDetailScreen(Screen):
                 Static("", id="suggestions-content"),
                 id="suggestions-section",
                 classes="suggestions-section",
+            ),
+
+            # Agent Windows Section (multi-window tracking)
+            Container(
+                Static("[bold cyan]Agent Windows[/bold cyan] [dim]([w] switch)[/dim]"),
+                Rule(line_style="heavy"),
+                Static("", id="windows-list"),
+                id="windows-section",
+                classes="windows-section",
             ),
 
             # tmux Output Section (Collapsible)
@@ -2943,14 +3044,18 @@ class TaskDetailScreen(Screen):
                 f"[cyan]Type:[/cyan] {self.task_data['type']}  │  [cyan]Agent:[/cyan] {agent_health}"
             )
 
+            # Update windows display
+            self._update_windows_display()
+
             # Update tmux output
             tmux_content = self._build_tmux_output_content()
             self.query_one("#tmux-content", Static).update(tmux_content)
 
-            # Update collapsible title
+            # Update collapsible title with window name
+            window_name = self._window_statuses[self.selected_window]["name"] if self._window_statuses else "tmux"
             line_count = 100 if self.tmux_output_expanded else 10
             collapsible = self.query_one("#tmux-collapsible", Collapsible)
-            collapsible.title = f"📺 tmux Output ({line_count} lines) [t]"
+            collapsible.title = f"📺 {window_name} Output ({line_count} lines) [t/w]"
         except Exception:
             pass  # Widget not ready yet
 
@@ -3032,13 +3137,18 @@ class TaskDetailScreen(Screen):
             # Hide suggestions section if empty
             suggestions_section = self.query_one("#suggestions-section", Container)
             suggestions_section.display = bool(self._suggested_prompts)
+
+            # Update windows display
+            self._update_windows_display()
+
             self.query_one("#tmux-content", Static).update(tmux_content)
             self.query_one("#task-body", Static).update(markdown_body)
 
-            # Update collapsible title and state
+            # Update collapsible title with window name
+            window_name = self._window_statuses[self.selected_window]["name"] if self._window_statuses else "tmux"
             line_count = 100 if self.tmux_output_expanded else 10
             collapsible = self.query_one("#tmux-collapsible", Collapsible)
-            collapsible.title = f"📺 tmux Output ({line_count} lines) [t]"
+            collapsible.title = f"📺 {window_name} Output ({line_count} lines) [t/w]"
             collapsible.collapsed = not self.tmux_output_expanded
         except Exception:
             pass  # Widgets not ready yet
@@ -3068,13 +3178,13 @@ class TaskDetailScreen(Screen):
         if not tmux_session:
             return "[dim]No tmux session for this task[/dim]"
 
-        from agentctl.core.tmux import capture_pane
+        from agentctl.core.tmux import capture_window_pane
 
         # Determine how many lines to show based on toggle state
         max_lines = 100 if self.tmux_output_expanded else 10
 
-        # Capture more lines than we'll display
-        recent_output = capture_pane(tmux_session, lines=200)
+        # Capture from selected window
+        recent_output = capture_window_pane(tmux_session, window=self.selected_window, lines=200)
 
         if not recent_output:
             return "[dim](session exists but no output captured)[/dim]"
@@ -3118,6 +3228,71 @@ class TaskDetailScreen(Screen):
             return dt.strftime("%Y-%m-%d %H:%M:%S")
         except (ValueError, TypeError):
             return "Invalid"
+
+    def _update_windows_display(self) -> None:
+        """Update the windows list display"""
+        tmux_session = self.task_data.get('tmux_session') if self.task_data else None
+
+        if not tmux_session:
+            try:
+                self.query_one("#windows-section", Container).display = False
+            except Exception:
+                pass
+            return
+
+        # Get window statuses
+        self._window_statuses = get_all_window_statuses(tmux_session, self.task_id)
+
+        if not self._window_statuses:
+            try:
+                self.query_one("#windows-section", Container).display = False
+            except Exception:
+                pass
+            return
+
+        # Show the section
+        try:
+            self.query_one("#windows-section", Container).display = True
+        except Exception:
+            pass
+
+        # Build display lines
+        lines = []
+        for w in self._window_statuses:
+            marker = "▶ " if w["index"] == self.selected_window else "  "
+            lines.append(f"{marker}{w['name']} ({w['index']})  {w['icon']} {w['summary']}")
+
+        try:
+            self.query_one("#windows-list", Static).update("\n".join(lines))
+        except Exception:
+            pass
+
+    def action_switch_window(self) -> None:
+        """Cycle through windows (w key)"""
+        if not self._window_statuses:
+            self.app.notify("No windows available", severity="warning")
+            return
+
+        # Cycle to next window
+        self.selected_window = (self.selected_window + 1) % len(self._window_statuses)
+
+        # Update displays
+        self._update_windows_display()
+
+        # Update tmux output for new window
+        try:
+            tmux_content = self._build_tmux_output_content()
+            self.query_one("#tmux-content", Static).update(tmux_content)
+
+            # Update collapsible title to show current window
+            window_name = self._window_statuses[self.selected_window]["name"] if self._window_statuses else "?"
+            line_count = 100 if self.tmux_output_expanded else 10
+            collapsible = self.query_one("#tmux-collapsible", Collapsible)
+            collapsible.title = f"📺 {window_name} Output ({line_count} lines) [t/w]"
+        except Exception:
+            pass
+
+        self.app.notify(f"Switched to {self._window_statuses[self.selected_window]['name']}", severity="information")
 
     def action_go_back(self) -> None:
         """Go back to previous screen"""
