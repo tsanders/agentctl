@@ -113,6 +113,10 @@ def capture_window_pane(
     if not session:
         return None
 
+    # Ensure window and pane are integers
+    window = int(window)
+    pane = int(pane)
+
     if window >= len(session.windows):
         return None
 
@@ -164,6 +168,10 @@ def send_keys(session_name: str, keys: str, enter: bool = True, window: int = 0,
 
     if not session:
         return False
+
+    # Ensure window and pane are integers
+    window = int(window)
+    pane = int(pane)
 
     # Get the target window
     if window >= len(session.windows):
