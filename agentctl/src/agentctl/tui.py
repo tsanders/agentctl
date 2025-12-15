@@ -49,24 +49,17 @@ class AgentStatusWidget(Static):
     def _build_row(self, agent: dict, from_tmux: bool = True) -> tuple:
         """Build a row tuple from agent data"""
         if from_tmux:
-            # Get multi-window status if available
-            tmux_session = agent.get('tmux_session')
-            task_id = agent.get('task_id')
-            if tmux_session:
-                window_statuses = get_all_window_statuses(tmux_session, task_id)
-                if len(window_statuses) > 1:
-                    # Multi-window: show inline icons "🟢 Claude 🟡 Codex"
-                    health_display = " ".join(
-                        f"{w['icon']} {w['name']}" for w in window_statuses
-                    )
-                elif window_statuses:
-                    # Single window: show traditional format
-                    w = window_statuses[0]
-                    health_display = f"{w['icon']} {w['summary'][:20]}"
-                else:
-                    health = agent.get('health', 'unknown')
-                    health_icon = HEALTH_ICONS.get(health, "⚪")
-                    health_display = f"{health_icon} {health.upper()}"
+            # Use pre-computed window_statuses if available (set in update_agents)
+            window_statuses = agent.get('_window_statuses', [])
+            if len(window_statuses) > 1:
+                # Multi-window: show inline icons "🟢 Claude 🟡 Codex"
+                health_display = " ".join(
+                    f"{w['icon']} {w['name']}" for w in window_statuses
+                )
+            elif window_statuses:
+                # Single window: show traditional format
+                w = window_statuses[0]
+                health_display = f"{w['icon']} {w['summary'][:20]}"
             else:
                 health = agent.get('health', 'unknown')
                 health_icon = HEALTH_ICONS.get(health, "⚪")
@@ -103,6 +96,10 @@ class AgentStatusWidget(Static):
         agents_to_show = []
         if agent_statuses:
             for agent in agent_statuses:
+                # Pre-compute window statuses once per agent (avoid repeated tmux queries)
+                tmux_session = agent.get('tmux_session')
+                if tmux_session:
+                    agent['_window_statuses'] = get_all_window_statuses(tmux_session, agent.get('task_id'))
                 agents_to_show.append((agent['task_id'], self._build_row(agent, from_tmux=True)))
         else:
             # Fall back to task_store for tasks without active tmux sessions
@@ -1483,11 +1480,14 @@ class TaskManagementScreen(Screen):
                 "low": "🟢 low"
             }.get(task.get('priority', 'medium'), "?")
 
-            # Agent health indicator
+            # Agent indicator (simple check, no expensive tmux queries)
             tmux_session = task.get('tmux_session')
             if tmux_session:
-                agent_status = get_agent_status(task['task_id'], tmux_session)
-                agent_display = f"{agent_status.get('icon', '?')} {agent_status.get('health', 'unknown')}"
+                from agentctl.core.tmux import session_exists
+                if session_exists(tmux_session):
+                    agent_display = "🟢 active"
+                else:
+                    agent_display = "🔴 exited"
             else:
                 agent_display = "- none"
 
