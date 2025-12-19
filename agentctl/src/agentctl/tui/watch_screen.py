@@ -151,6 +151,21 @@ class WatchScreen(Screen):
         padding: 1;
     }
 
+    WatchScreen #stack-container {
+        padding: 1;
+    }
+
+    WatchScreen .section-header {
+        text-style: bold;
+        padding: 0 0 1 0;
+    }
+
+    WatchScreen .collapsed-card {
+        height: 1;
+        border: none;
+        padding: 0 1;
+    }
+
     WatchScreen #footer {
         dock: bottom;
         height: 1;
@@ -176,6 +191,10 @@ class WatchScreen(Screen):
         self._discover_agents()
         self._update_all_outputs()
         self.set_interval(self._refresh_interval, self._update_all_outputs)
+
+    def watch_view_mode(self, new_mode: str) -> None:
+        """React to view mode changes."""
+        self._render_current_view()
 
     def _discover_agents(self) -> None:
         """Discover all agent-* tmux sessions."""
@@ -212,6 +231,71 @@ class WatchScreen(Screen):
         if 0 <= self.focused_index < len(self.agent_cards):
             return self.agent_cards[self.focused_index]
         return None
+
+    def _render_current_view(self) -> None:
+        """Render the appropriate view based on view_mode."""
+        # Remove existing containers
+        for container_id in ["grid-container", "stack-container", "filtered-container"]:
+            try:
+                existing = self.query_one(f"#{container_id}")
+                existing.remove()
+            except:
+                pass
+
+        # Render the appropriate view
+        if self.view_mode == "grid":
+            self._render_grid_view()
+        elif self.view_mode == "stack":
+            self._render_stack_view()
+        elif self.view_mode == "filtered":
+            self._render_filtered_view()
+
+    def _render_grid_view(self) -> None:
+        """Render grid view with all agent cards."""
+        container = ScrollableContainer(id="grid-container")
+        for card in self.agent_cards:
+            container.mount(card)
+        if not self.agent_cards:
+            container.mount(Static("[dim]No agent sessions found[/dim]"))
+        self.mount(container, before=self.query_one("#footer"))
+
+    def _render_stack_view(self) -> None:
+        """Render stack view with waiting cards expanded and active cards collapsed."""
+        container = ScrollableContainer(id="stack-container")
+
+        # Get waiting and active cards
+        waiting_cards = self._get_waiting_cards()
+        active_cards = [c for c in self.agent_cards if c not in waiting_cards]
+
+        # Waiting section
+        if waiting_cards:
+            header = Static(f"🟠 NEEDS ATTENTION ({len(waiting_cards)})", classes="section-header")
+            container.mount(header)
+            for card in waiting_cards:
+                container.mount(card)
+
+        # Active section
+        if active_cards:
+            header = Static(f"🟢 ACTIVE ({len(active_cards)})", classes="section-header")
+            container.mount(header)
+            for card in active_cards:
+                # Create collapsed single-line summary
+                first_line = ""
+                if card.parsed_output and card.parsed_output.clean_lines:
+                    first_line = card.parsed_output.clean_lines[0][:40]
+                collapsed = Static(f"{card.task_id}: {first_line}", classes="collapsed-card")
+                container.mount(collapsed)
+
+        if not self.agent_cards:
+            container.mount(Static("[dim]No agent sessions found[/dim]"))
+
+        self.mount(container, before=self.query_one("#footer"))
+
+    def _render_filtered_view(self) -> None:
+        """Render filtered view (placeholder for future implementation)."""
+        container = ScrollableContainer(id="filtered-container")
+        container.mount(Static("[dim]Filtered view - coming soon[/dim]"))
+        self.mount(container, before=self.query_one("#footer"))
 
     # Actions
     def action_go_back(self) -> None:
@@ -322,7 +406,7 @@ class WatchScreen(Screen):
     def action_stack_view(self) -> None:
         """Switch to stack (priority) view."""
         self.view_mode = "stack"
-        self.notify("Stack view - coming soon", severity="warning")
+        self.notify("Stack view")
 
     def action_filtered_view(self) -> None:
         """Switch to filtered tabs view."""
