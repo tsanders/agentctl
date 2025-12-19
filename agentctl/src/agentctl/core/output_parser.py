@@ -13,6 +13,9 @@ PROMPT_QUESTION_PATTERN = re.compile(r'^\s*Do you want to (.+)\?')
 PROMPT_OPTION_PATTERN = re.compile(r'^\s*[>]?\s*(\d+)\.\s+(.+)$')
 SELECTED_OPTION_PATTERN = re.compile(r'^\s*[>❯]\s*(\d+)\.')
 
+# Keywords that indicate destructive operations
+DESTRUCTIVE_KEYWORDS = ["delete", "remove", "overwrite", "destroy", "drop", "truncate", "wipe"]
+
 
 @dataclass
 class PromptInfo:
@@ -183,3 +186,16 @@ def _select_prompt_lines(lines: List[str], max_lines: int) -> List[str]:
 
     # Fallback: return last N lines
     return lines[-max_lines:]
+
+
+def is_destructive_prompt(prompt: PromptInfo) -> bool:
+    """Check if a prompt appears to be destructive.
+
+    Args:
+        prompt: PromptInfo to check
+
+    Returns:
+        True if the prompt contains destructive keywords
+    """
+    question_lower = prompt.question.lower()
+    return any(keyword in question_lower for keyword in DESTRUCTIVE_KEYWORDS)

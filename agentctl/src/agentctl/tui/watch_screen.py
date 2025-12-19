@@ -8,7 +8,7 @@ from textual.reactive import reactive
 from textual.css.query import NoMatches
 from typing import List, Dict, Optional, Literal
 
-from agentctl.core.output_parser import parse_output, ParsedOutput
+from agentctl.core.output_parser import parse_output, ParsedOutput, is_destructive_prompt
 from agentctl.core.tmux import list_sessions, capture_window_pane, send_keys
 from agentctl.core.agent_monitor import HEALTH_ICONS, HEALTH_WAITING
 
@@ -497,16 +497,23 @@ class WatchScreen(Screen):
         self._send_to_focused(2)
 
     def action_approve_all(self) -> None:
-        """Approve all waiting agents with option 1."""
+        """Approve all waiting agents with option 1 (skip destructive)."""
         waiting = self._get_waiting_cards()
+        approved = 0
+        skipped = 0
+
         for card in waiting:
-            # Safety check - skip destructive prompts
             if card.parsed_output and card.parsed_output.prompt:
-                question = card.parsed_output.prompt.question.lower()
-                if any(word in question for word in ["delete", "remove", "overwrite", "destroy"]):
+                if is_destructive_prompt(card.parsed_output.prompt):
+                    skipped += 1
                     continue
             card.send_approval(1)
-        self.notify(f"Approved {len(waiting)} agents")
+            approved += 1
+
+        msg = f"Approved {approved}"
+        if skipped:
+            msg += f", skipped {skipped} destructive"
+        self.notify(msg)
 
     def _send_to_focused(self, option: int) -> None:
         """Send option to focused card."""

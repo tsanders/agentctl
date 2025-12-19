@@ -1,7 +1,7 @@
 """Tests for output_parser module"""
 
 import pytest
-from agentctl.core.output_parser import strip_ansi, collapse_whitespace, ParsedOutput, PromptInfo, extract_prompt, parse_output
+from agentctl.core.output_parser import strip_ansi, collapse_whitespace, ParsedOutput, PromptInfo, extract_prompt, parse_output, is_destructive_prompt
 
 
 class TestStripAnsi:
@@ -136,3 +136,21 @@ even more
         result = parse_output("", max_lines=4)
         assert result.clean_lines == []
         assert result.prompt is None
+
+
+class TestIsDestructivePrompt:
+    def test_detects_delete(self):
+        prompt = PromptInfo("Do you want to delete this file?", ["Yes", "No"], 0)
+        assert is_destructive_prompt(prompt) is True
+
+    def test_detects_remove(self):
+        prompt = PromptInfo("Do you want to remove all data?", ["Yes", "No"], 0)
+        assert is_destructive_prompt(prompt) is True
+
+    def test_detects_overwrite(self):
+        prompt = PromptInfo("Do you want to overwrite existing.py?", ["Yes", "No"], 0)
+        assert is_destructive_prompt(prompt) is True
+
+    def test_safe_prompt_returns_false(self):
+        prompt = PromptInfo("Do you want to create test.py?", ["Yes", "No"], 0)
+        assert is_destructive_prompt(prompt) is False
