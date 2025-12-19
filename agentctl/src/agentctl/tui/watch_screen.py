@@ -167,6 +167,11 @@ class WatchScreen(Screen):
         padding: 0 1;
     }
 
+    WatchScreen .tab-bar {
+        height: 1;
+        padding: 0 1;
+    }
+
     WatchScreen #footer {
         dock: bottom;
         height: 1;
@@ -176,6 +181,7 @@ class WatchScreen(Screen):
 
     view_mode: reactive[Literal["grid", "stack", "filtered"]] = reactive("grid")
     focused_index: reactive[int] = reactive(0)
+    current_filter: reactive[str] = reactive("attention")
 
     def __init__(self):
         super().__init__()
@@ -293,9 +299,45 @@ class WatchScreen(Screen):
         self.mount(container, before=self.query_one("#footer"))
 
     def _render_filtered_view(self) -> None:
-        """Render filtered view (placeholder for future implementation)."""
-        container = ScrollableContainer(id="filtered-container")
-        container.mount(Static("[dim]Filtered view - coming soon[/dim]"))
+        """Render filtered view with tabs for attention/active/idle/all."""
+        container = Vertical(id="filtered-container")
+
+        # Categorize cards
+        waiting_cards = self._get_waiting_cards()
+        active_cards = [c for c in self.agent_cards if c not in waiting_cards and c.health == "active"]
+        idle_cards = [c for c in self.agent_cards if c not in waiting_cards and c.health != "active"]
+
+        # Create tab bar
+        tab_bar = Horizontal(classes="tab-bar")
+
+        # Format tabs with selection indicator
+        attention_tab = f"[>Attention: {len(waiting_cards)}]" if self.current_filter == "attention" else f"[ Attention: {len(waiting_cards)}]"
+        active_tab = f"[>Active: {len(active_cards)}]" if self.current_filter == "active" else f"[ Active: {len(active_cards)}]"
+        idle_tab = f"[>Idle: {len(idle_cards)}]" if self.current_filter == "idle" else f"[ Idle: {len(idle_cards)}]"
+        all_tab = f"[>All: {len(self.agent_cards)}]" if self.current_filter == "all" else f"[ All: {len(self.agent_cards)}]"
+
+        tab_bar.mount(Static(f"{attention_tab} {active_tab} {idle_tab} {all_tab}"))
+        container.mount(tab_bar)
+
+        # Show cards based on current filter
+        scroll_area = ScrollableContainer()
+
+        if self.current_filter == "attention":
+            cards_to_show = waiting_cards
+        elif self.current_filter == "active":
+            cards_to_show = active_cards
+        elif self.current_filter == "idle":
+            cards_to_show = idle_cards
+        else:  # "all"
+            cards_to_show = self.agent_cards
+
+        if cards_to_show:
+            for card in cards_to_show:
+                scroll_area.mount(card)
+        else:
+            scroll_area.mount(Static(f"[dim]No {self.current_filter} agents[/dim]"))
+
+        container.mount(scroll_area)
         self.mount(container, before=self.query_one("#footer"))
 
     # Actions
@@ -313,16 +355,28 @@ class WatchScreen(Screen):
         self._send_to_focused(1)
 
     def action_approve_1(self) -> None:
-        self._send_to_focused(1)
+        if self.view_mode == "filtered":
+            self.action_filter_attention()
+        else:
+            self._send_to_focused(1)
 
     def action_approve_2(self) -> None:
-        self._send_to_focused(2)
+        if self.view_mode == "filtered":
+            self.action_filter_active()
+        else:
+            self._send_to_focused(2)
 
     def action_approve_3(self) -> None:
-        self._send_to_focused(3)
+        if self.view_mode == "filtered":
+            self.action_filter_idle()
+        else:
+            self._send_to_focused(3)
 
     def action_approve_4(self) -> None:
-        self._send_to_focused(4)
+        if self.view_mode == "filtered":
+            self.action_filter_all()
+        else:
+            self._send_to_focused(4)
 
     def action_approve_no(self) -> None:
         """Send no/2 to focused agent."""
@@ -412,7 +466,31 @@ class WatchScreen(Screen):
     def action_filtered_view(self) -> None:
         """Switch to filtered tabs view."""
         self.view_mode = "filtered"
-        self.notify("Filtered view - coming soon", severity="warning")
+        self.notify("Filtered view")
+
+    def action_filter_attention(self) -> None:
+        """Filter to show only attention cards."""
+        self.current_filter = "attention"
+        if self.view_mode == "filtered":
+            self._render_current_view()
+
+    def action_filter_active(self) -> None:
+        """Filter to show only active cards."""
+        self.current_filter = "active"
+        if self.view_mode == "filtered":
+            self._render_current_view()
+
+    def action_filter_idle(self) -> None:
+        """Filter to show only idle cards."""
+        self.current_filter = "idle"
+        if self.view_mode == "filtered":
+            self._render_current_view()
+
+    def action_filter_all(self) -> None:
+        """Filter to show all cards."""
+        self.current_filter = "all"
+        if self.view_mode == "filtered":
+            self._render_current_view()
 
     def action_show_help(self) -> None:
         """Show help overlay."""
