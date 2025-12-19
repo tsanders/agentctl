@@ -10,7 +10,8 @@
       "Bash(agentctl tasks:*)",
       "Bash(agentctl task:*)",
       "Bash(agentctl agents:*)",
-      "Bash(tmux list-sessions:*)"
+      "Bash(tmux list-sessions:*)",
+      "Skill(superpowers:subagent-driven-development)"
     ],
     "deny": [],
     "ask": []

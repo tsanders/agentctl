@@ -312,3 +312,27 @@ class WatchScreen(Screen):
                 card.add_class("focused")
             else:
                 card.remove_class("focused")
+
+    # View mode actions (stubs for future implementation)
+    def action_grid_view(self) -> None:
+        """Switch to grid view."""
+        self.view_mode = "grid"
+        self.notify("Grid view")
+
+    def action_stack_view(self) -> None:
+        """Switch to stack (priority) view."""
+        self.view_mode = "stack"
+        self.notify("Stack view - coming soon", severity="warning")
+
+    def action_filtered_view(self) -> None:
+        """Switch to filtered tabs view."""
+        self.view_mode = "filtered"
+        self.notify("Filtered view - coming soon", severity="warning")
+
+    def action_show_help(self) -> None:
+        """Show help overlay."""
+        self.notify("Help: [g]rid [s]tack [f]ilter | arrows/hjkl navigate | y/1-4 approve | [a]ll")
+
+    def action_type_response(self) -> None:
+        """Open text input modal for custom response."""
+        self.notify("Text input - coming soon", severity="warning")
