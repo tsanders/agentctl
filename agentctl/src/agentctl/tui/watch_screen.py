@@ -165,6 +165,57 @@ class TextInputModal(ModalScreen):
             self.dismiss(None)
 
 
+class WatchHelpModal(ModalScreen):
+    """Help overlay showing all keybindings."""
+
+    BINDINGS = [("escape", "dismiss", "Close"), ("question_mark", "dismiss", "Close")]
+
+    DEFAULT_CSS = """
+    WatchHelpModal {
+        align: center middle;
+    }
+
+    WatchHelpModal > Container {
+        width: 70;
+        height: auto;
+        max-height: 80%;
+        border: thick $primary;
+        background: $surface;
+        padding: 1 2;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        help_text = """
+[bold]Navigation[/bold]
+  ↑/↓/←/→ or hjkl   Move between cards
+  Tab               Jump to next waiting agent
+  Enter             Expand focused card
+
+[bold]Approval[/bold]
+  y or 1            Send Yes/option 1 to focused agent
+  n or 2            Send No/option 2
+  3, 4              Send option 3 or 4
+  t                 Type custom response
+  a                 Approve ALL waiting agents
+
+[bold]Views[/bold]
+  g                 Grid view (default)
+  s                 Stack view (waiting expanded at top)
+  f                 Filtered tabs view
+  1-4 (filtered)    Switch filter tabs
+
+[bold]Other[/bold]
+  r                 Refresh all outputs
+  Escape            Return to dashboard
+  ?                 Show this help
+"""
+        yield Container(
+            Label("[bold]Watch Screen Help[/bold]"),
+            Static(help_text),
+        )
+
+
 class WatchScreen(Screen):
     """Multi-agent monitoring screen with compact cards."""
 
@@ -557,7 +608,7 @@ class WatchScreen(Screen):
 
     def action_show_help(self) -> None:
         """Show help overlay."""
-        self.notify("Help: [g]rid [s]tack [f]ilter | arrows/hjkl navigate | y/1-4 approve | [a]ll")
+        self.push_screen(WatchHelpModal())
 
     def action_type_response(self) -> None:
         """Open text input modal for custom response."""
