@@ -5,6 +5,7 @@ from textual.containers import Container, ScrollableContainer, Horizontal, Verti
 from textual.widgets import Static, Label
 from textual.screen import Screen
 from textual.reactive import reactive
+from textual.css.query import NoMatches
 from typing import List, Dict, Optional, Literal
 
 from agentctl.core.output_parser import parse_output, ParsedOutput
@@ -239,8 +240,8 @@ class WatchScreen(Screen):
             try:
                 existing = self.query_one(f"#{container_id}")
                 existing.remove()
-            except:
-                pass
+            except NoMatches:
+                pass  # Container doesn't exist, which is expected
 
         # Render the appropriate view
         if self.view_mode == "grid":
