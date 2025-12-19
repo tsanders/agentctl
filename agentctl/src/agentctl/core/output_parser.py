@@ -123,3 +123,63 @@ def extract_prompt(lines: List[str]) -> Optional[PromptInfo]:
         )
 
     return None
+
+
+def parse_output(raw_text: str, max_lines: int = 4) -> ParsedOutput:
+    """Parse raw tmux output into clean, compact format.
+
+    Args:
+        raw_text: Raw captured output from tmux pane
+        max_lines: Maximum number of lines to return (default 4)
+
+    Returns:
+        ParsedOutput with cleaned lines and extracted prompt info
+    """
+    if not raw_text:
+        return ParsedOutput(raw_lines=[], clean_lines=[], prompt=None)
+
+    # Split into lines
+    raw_lines = raw_text.split('\n')
+
+    # Strip ANSI codes from each line
+    stripped_lines = [strip_ansi(line) for line in raw_lines]
+
+    # Collapse whitespace
+    collapsed_lines = collapse_whitespace(stripped_lines)
+
+    # Try to extract prompt
+    prompt = extract_prompt(collapsed_lines)
+
+    # Select which lines to show
+    if prompt:
+        # Find prompt start and include it
+        clean_lines = _select_prompt_lines(collapsed_lines, max_lines)
+    else:
+        # Just take the last N non-empty lines
+        clean_lines = collapsed_lines[-max_lines:] if collapsed_lines else []
+
+    return ParsedOutput(
+        raw_lines=raw_lines,
+        clean_lines=clean_lines,
+        prompt=prompt
+    )
+
+
+def _select_prompt_lines(lines: List[str], max_lines: int) -> List[str]:
+    """Select lines that best represent the prompt.
+
+    Prioritizes showing the question and options.
+    """
+    # Find the question line
+    question_idx = None
+    for i, line in enumerate(lines):
+        if PROMPT_QUESTION_PATTERN.match(line):
+            question_idx = i
+            break
+
+    if question_idx is not None:
+        # Return from question onwards, limited to max_lines
+        return lines[question_idx:question_idx + max_lines]
+
+    # Fallback: return last N lines
+    return lines[-max_lines:]

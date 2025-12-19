@@ -1,7 +1,7 @@
 """Tests for output_parser module"""
 
 import pytest
-from agentctl.core.output_parser import strip_ansi, collapse_whitespace, ParsedOutput, PromptInfo, extract_prompt
+from agentctl.core.output_parser import strip_ansi, collapse_whitespace, ParsedOutput, PromptInfo, extract_prompt, parse_output
 
 
 class TestStripAnsi:
@@ -89,3 +89,50 @@ class TestExtractPrompt:
         prompt = extract_prompt(lines)
         assert prompt is not None
         assert "run this command" in prompt.question
+
+
+class TestParseOutput:
+    def test_full_parsing_with_prompt(self):
+        raw = """
+\x1b[32m Some colored output\x1b[0m
+
+
+ Do you want to create test.py?
+ > 1. Yes
+   2. No
+
+ Esc to cancel
+"""
+        result = parse_output(raw, max_lines=4)
+
+        assert len(result.clean_lines) <= 4
+        assert result.prompt is not None
+        assert result.prompt.question == "Do you want to create test.py?"
+
+    def test_limits_output_lines(self):
+        raw = "\n".join([f"line {i}" for i in range(100)])
+        result = parse_output(raw, max_lines=4)
+
+        assert len(result.clean_lines) == 4
+
+    def test_prioritizes_prompt_in_output(self):
+        raw = """
+lots of build output here
+more output
+even more
+
+ Do you want to proceed?
+ > 1. Yes
+   2. No
+"""
+        result = parse_output(raw, max_lines=4)
+
+        # Should include the prompt, not just the first 4 lines
+        assert result.prompt is not None
+        assert any("proceed" in line.lower() or "yes" in line.lower()
+                   for line in result.clean_lines)
+
+    def test_handles_empty_input(self):
+        result = parse_output("", max_lines=4)
+        assert result.clean_lines == []
+        assert result.prompt is None
