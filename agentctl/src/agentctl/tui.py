@@ -18,6 +18,7 @@ from agentctl.core.agent_monitor import (
     get_agent_status, get_all_agent_statuses, get_all_window_statuses,
     get_health_display, HEALTH_ICONS, check_and_notify_state_changes, save_session_log
 )
+from agentctl.tui.watch_screen import WatchScreen
 
 
 class AgentStatusWidget(Static):
@@ -4353,6 +4354,7 @@ class AgentDashboard(App):
         ("t", "manage_tasks", "Tasks"),
         ("a", "view_active_agents", "Active Agents"),
         ("u", "view_prompts", "Prompts"),
+        ("w", "watch_screen", "Watch"),
         ("j", "cursor_down", "Down"),
         ("k", "cursor_up", "Up"),
         ("question_mark", "show_help", "Help"),
@@ -4406,6 +4408,10 @@ class AgentDashboard(App):
     def action_view_prompts(self) -> None:
         """Open prompt library screen"""
         self.push_screen(PromptLibraryScreen())
+
+    def action_watch_screen(self) -> None:
+        """Open multi-agent watch screen."""
+        self.push_screen(WatchScreen())
 
     def action_cursor_down(self) -> None:
         """Move cursor down in agents table (vim j)"""
