@@ -4468,3 +4468,21 @@ def run_dashboard(open_agents: bool = False):
         screen.filter_mode = "active_agents"
         app.push_screen(screen)
     app.run()
+
+
+def run_watch():
+    """Run the multi-agent watch screen for monitoring many agents at once."""
+    from agentctl.tui.watch_screen import WatchScreen
+
+    class WatchApp(App):
+        """Minimal app to host the WatchScreen."""
+
+        BINDINGS = [
+            ("q", "quit", "Quit"),
+        ]
+
+        def on_mount(self) -> None:
+            self.push_screen(WatchScreen())
+
+    app = WatchApp()
+    app.run()

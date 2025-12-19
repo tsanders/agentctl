@@ -59,6 +59,13 @@ def dash(
 
 
 @app.command()
+def watch():
+    """Launch multi-agent watch screen for monitoring many agents at once"""
+    from agentctl.tui import run_watch
+    run_watch()
+
+
+@app.command()
 def status():
     """Show quick status of all agents"""
     agents = task_store.get_active_agents()
