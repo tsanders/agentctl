@@ -2,8 +2,8 @@
 
 from textual.app import ComposeResult
 from textual.containers import Container, ScrollableContainer, Horizontal, Vertical
-from textual.widgets import Static, Label
-from textual.screen import Screen
+from textual.widgets import Static, Label, Input, Button
+from textual.screen import Screen, ModalScreen
 from textual.reactive import reactive
 from textual.css.query import NoMatches
 from typing import List, Dict, Optional, Literal
@@ -100,6 +100,69 @@ class AgentCard(Static):
             True if sent successfully
         """
         return send_keys(self.tmux_session, text, enter=True)
+
+
+class TextInputModal(ModalScreen):
+    """Modal for typing custom response to an agent."""
+
+    DEFAULT_CSS = """
+    TextInputModal {
+        align: center middle;
+    }
+
+    TextInputModal > Container {
+        width: 60;
+        height: auto;
+        border: thick $primary;
+        background: $surface;
+        padding: 1 2;
+    }
+
+    TextInputModal Input {
+        margin: 1 0;
+    }
+
+    TextInputModal .buttons {
+        align: center middle;
+        height: 3;
+    }
+    """
+
+    def __init__(self, task_id: str, tmux_session: str):
+        super().__init__()
+        self.task_id = task_id
+        self.tmux_session = tmux_session
+
+    def compose(self) -> ComposeResult:
+        yield Container(
+            Label(f"Send to {self.task_id}:"),
+            Input(placeholder="Type your response...", id="response-input"),
+            Horizontal(
+                Button("Send", variant="primary", id="send-btn"),
+                Button("Cancel", id="cancel-btn"),
+                classes="buttons"
+            )
+        )
+
+    def on_mount(self) -> None:
+        self.query_one("#response-input", Input).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "send-btn":
+            self._send_response()
+        else:
+            self.dismiss(None)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self._send_response()
+
+    def _send_response(self) -> None:
+        text = self.query_one("#response-input", Input).value
+        if text:
+            send_keys(self.tmux_session, text, enter=True)
+            self.dismiss(text)
+        else:
+            self.dismiss(None)
 
 
 class WatchScreen(Screen):
@@ -498,4 +561,15 @@ class WatchScreen(Screen):
 
     def action_type_response(self) -> None:
         """Open text input modal for custom response."""
-        self.notify("Text input - coming soon", severity="warning")
+        card = self._get_focused_card()
+        if card:
+            def on_dismiss(result):
+                if result:
+                    self.notify(f"Sent to {card.task_id}")
+
+            self.push_screen(
+                TextInputModal(card.task_id, card.tmux_session),
+                on_dismiss
+            )
+        else:
+            self.notify("No agent focused", severity="warning")
