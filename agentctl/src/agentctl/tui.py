@@ -1341,13 +1341,20 @@ class TaskManagementScreen(Screen):
         ("f", "toggle_filter", "Filter"),
         ("a", "filter_active", "Active"),
         ("r", "refresh", "Refresh"),
+        ("s", "cycle_sort", "Sort"),
+        ("S", "toggle_sort_order", "Sort↕"),
         ("question_mark", "show_help", "Help"),
         ("q", "quit", "Quit"),
     ]
 
+    # Sort column options: id, agent, status, phase
+    SORT_COLUMNS = ["id", "agent", "status", "phase"]
+
     def __init__(self):
         super().__init__()
         self.filter_mode = "all"  # Options: all, active_agents, running, queued, blocked, completed
+        self.sort_column = "id"  # Default sort by ID
+        self.sort_reverse = False  # Ascending by default
         # Prompt history navigation state
         self._prompt_history: List[str] = []
         self._history_index: int = -1  # -1 means not browsing history
@@ -1417,8 +1424,19 @@ class TaskManagementScreen(Screen):
         else:  # "all"
             tasks = all_tasks
 
-        # Sort by task ID
-        tasks = sorted(tasks, key=lambda t: t.get('task_id', ''))
+        # Sort by selected column
+        def get_sort_key(task):
+            if self.sort_column == "id":
+                return task.get('task_id', '')
+            elif self.sort_column == "agent":
+                return task.get('agent_status', '')
+            elif self.sort_column == "status":
+                return task.get('agent_status', '')
+            elif self.sort_column == "phase":
+                return task.get('phase', '')
+            return task.get('task_id', '')
+
+        tasks = sorted(tasks, key=get_sort_key, reverse=self.sort_reverse)
 
         # Check agent health and send desktop notifications
         # (only when viewing all tasks or active agents to avoid duplicate checks)
@@ -1427,7 +1445,7 @@ class TaskManagementScreen(Screen):
             agent_statuses = get_all_agent_statuses()
             check_and_notify_state_changes(agent_statuses)
 
-        # Update title to show current filter
+        # Update title to show current filter and sort
         title_prefix = "📋 TASK MANAGEMENT"
         filter_indicators = {
             "all": "",
@@ -1442,6 +1460,10 @@ class TaskManagementScreen(Screen):
         # Add task count if filtered
         if self.filter_mode != "all":
             title_text += f" ({len(tasks)}/{len(all_tasks)})"
+
+        # Add sort indicator
+        sort_arrow = "↓" if not self.sort_reverse else "↑"
+        title_text += f" [dim][s] {self.sort_column.upper()}{sort_arrow}[/dim]"
 
         # Update title dynamically
         try:
@@ -1815,6 +1837,22 @@ class TaskManagementScreen(Screen):
         """Manually refresh task list"""
         self.load_tasks()
         self.app.notify("Tasks refreshed", severity="information")
+
+    def action_cycle_sort(self) -> None:
+        """Cycle through sort columns (s key)"""
+        current_idx = self.SORT_COLUMNS.index(self.sort_column) if self.sort_column in self.SORT_COLUMNS else 0
+        self.sort_column = self.SORT_COLUMNS[(current_idx + 1) % len(self.SORT_COLUMNS)]
+        self.load_tasks()
+        sort_arrow = "↓" if not self.sort_reverse else "↑"
+        self.app.notify(f"Sort: {self.sort_column.upper()} {sort_arrow}", severity="information")
+
+    def action_toggle_sort_order(self) -> None:
+        """Toggle sort order ascending/descending (S key)"""
+        self.sort_reverse = not self.sort_reverse
+        self.load_tasks()
+        order_label = "Descending" if self.sort_reverse else "Ascending"
+        sort_arrow = "↑" if self.sort_reverse else "↓"
+        self.app.notify(f"Sort: {self.sort_column.upper()} {sort_arrow} ({order_label})", severity="information")
 
     def action_show_help(self) -> None:
         """Show help overlay"""
