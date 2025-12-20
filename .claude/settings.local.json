@@ -11,7 +11,11 @@
       "Bash(agentctl task:*)",
       "Bash(agentctl agents:*)",
       "Bash(tmux list-sessions:*)",
-      "Skill(superpowers:subagent-driven-development)"
+      "Skill(superpowers:subagent-driven-development)",
+      "Bash(if [ -d tests ])",
+      "Bash(then uv run pytest tests/ -v)",
+      "Bash(else echo \"No tests directory found\")",
+      "Bash(fi)"
     ],
     "deny": [],
     "ask": []

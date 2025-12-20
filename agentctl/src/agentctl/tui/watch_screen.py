@@ -374,15 +374,18 @@ class WatchScreen(Screen):
     def _render_grid_view(self) -> None:
         """Render grid view with all agent cards."""
         container = ScrollableContainer(id="grid-container")
+        # Mount container first, then add children
+        self.mount(container, before=self.query_one("#footer"))
         for card in self.agent_cards:
             container.mount(card)
         if not self.agent_cards:
             container.mount(Static("[dim]No agent sessions found[/dim]"))
-        self.mount(container, before=self.query_one("#footer"))
 
     def _render_stack_view(self) -> None:
         """Render stack view with waiting cards expanded and active cards collapsed."""
         container = ScrollableContainer(id="stack-container")
+        # Mount container first, then add children
+        self.mount(container, before=self.query_one("#footer"))
 
         # Get waiting and active cards
         waiting_cards = self._get_waiting_cards()
@@ -410,19 +413,12 @@ class WatchScreen(Screen):
         if not self.agent_cards:
             container.mount(Static("[dim]No agent sessions found[/dim]"))
 
-        self.mount(container, before=self.query_one("#footer"))
-
     def _render_filtered_view(self) -> None:
         """Render filtered view with tabs for attention/active/idle/all."""
-        container = Vertical(id="filtered-container")
-
-        # Categorize cards
+        # Categorize cards first
         waiting_cards = self._get_waiting_cards()
         active_cards = [c for c in self.agent_cards if c not in waiting_cards and c.health == "active"]
         idle_cards = [c for c in self.agent_cards if c not in waiting_cards and c.health != "active"]
-
-        # Create tab bar
-        tab_bar = Horizontal(classes="tab-bar")
 
         # Format tabs with selection indicator
         attention_tab = f"[>Attention: {len(waiting_cards)}]" if self.current_filter == "attention" else f"[ Attention: {len(waiting_cards)}]"
@@ -430,12 +426,7 @@ class WatchScreen(Screen):
         idle_tab = f"[>Idle: {len(idle_cards)}]" if self.current_filter == "idle" else f"[ Idle: {len(idle_cards)}]"
         all_tab = f"[>All: {len(self.agent_cards)}]" if self.current_filter == "all" else f"[ All: {len(self.agent_cards)}]"
 
-        tab_bar.mount(Static(f"{attention_tab} {active_tab} {idle_tab} {all_tab}"))
-        container.mount(tab_bar)
-
-        # Show cards based on current filter
-        scroll_area = ScrollableContainer()
-
+        # Determine cards to show
         if self.current_filter == "attention":
             cards_to_show = waiting_cards
         elif self.current_filter == "active":
@@ -445,14 +436,24 @@ class WatchScreen(Screen):
         else:  # "all"
             cards_to_show = self.agent_cards
 
+        # Create and mount container first
+        container = Vertical(id="filtered-container")
+        self.mount(container, before=self.query_one("#footer"))
+
+        # Create and mount tab bar
+        tab_bar = Horizontal(classes="tab-bar")
+        container.mount(tab_bar)
+        tab_bar.mount(Static(f"{attention_tab} {active_tab} {idle_tab} {all_tab}"))
+
+        # Create and mount scroll area
+        scroll_area = ScrollableContainer()
+        container.mount(scroll_area)
+
         if cards_to_show:
             for card in cards_to_show:
                 scroll_area.mount(card)
         else:
             scroll_area.mount(Static(f"[dim]No {self.current_filter} agents[/dim]"))
-
-        container.mount(scroll_area)
-        self.mount(container, before=self.query_one("#footer"))
 
     # Actions
     def action_go_back(self) -> None:
