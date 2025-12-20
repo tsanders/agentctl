@@ -304,23 +304,27 @@ class WatchScreen(Screen):
 
     def compose(self) -> ComposeResult:
         yield Static("🔍 AGENT WATCH", id="header")
-        yield ScrollableContainer(id="grid-container")
+        # Don't create container here - _render_current_view will create it
         yield Static("[g]rid [s]tack [f]ilter | [a]pprove all | [?]help", id="footer")
 
     def on_mount(self) -> None:
         """Initialize and start refresh loop."""
         self._discover_agents()
         self._update_all_outputs()
+        self._render_current_view()  # Create initial view
         self.set_interval(self._refresh_interval, self._update_all_outputs)
 
     def watch_view_mode(self, new_mode: str) -> None:
         """React to view mode changes."""
-        self._render_current_view()
+        # Only re-render if we're already mounted (not during initial setup)
+        try:
+            self.query_one("#footer")
+            self._render_current_view()
+        except NoMatches:
+            pass  # Not mounted yet
 
     def _discover_agents(self) -> None:
         """Discover all agent-* tmux sessions."""
-        container = self.query_one("#grid-container")
-        container.remove_children()
         self.agent_cards.clear()
 
         sessions = list_sessions()
@@ -331,10 +335,6 @@ class WatchScreen(Screen):
             task_id = session.replace("agent-", "", 1)
             card = AgentCard(task_id=task_id, tmux_session=session)
             self.agent_cards.append(card)
-            container.mount(card)
-
-        if not self.agent_cards:
-            container.mount(Static("[dim]No agent sessions found[/dim]"))
 
     def _update_all_outputs(self) -> None:
         """Refresh output for all agent cards."""
@@ -464,6 +464,7 @@ class WatchScreen(Screen):
         """Force refresh all outputs."""
         self._discover_agents()
         self._update_all_outputs()
+        self._render_current_view()
 
     def action_approve_yes(self) -> None:
         """Send yes/1 to focused agent."""
