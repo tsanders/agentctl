@@ -66,18 +66,28 @@ class AgentCard(Static):
         """Update the card with new output."""
         self.parsed_output = parse_output(raw_output, max_lines=3)
 
-        output_widget = self.query_one("#output", Static)
-        if self.parsed_output.clean_lines:
-            output_widget.update("\n".join(self.parsed_output.clean_lines))
-        else:
-            output_widget.update("(no output)")
-
-        # Update styling based on prompt detection
+        # Update health based on prompt detection (always do this)
         if self.parsed_output.prompt:
-            self.add_class("waiting")
             self.health = HEALTH_WAITING
-        else:
-            self.remove_class("waiting")
+
+        # Only update widget if card is mounted
+        if not self.is_attached:
+            return
+
+        try:
+            output_widget = self.query_one("#output", Static)
+            if self.parsed_output.clean_lines:
+                output_widget.update("\n".join(self.parsed_output.clean_lines))
+            else:
+                output_widget.update("(no output)")
+
+            # Update styling based on prompt detection
+            if self.parsed_output.prompt:
+                self.add_class("waiting")
+            else:
+                self.remove_class("waiting")
+        except NoMatches:
+            pass  # Card not fully composed yet
 
     def send_approval(self, option: int = 1) -> bool:
         """Send an approval key to this agent's tmux session.
@@ -310,8 +320,8 @@ class WatchScreen(Screen):
     def on_mount(self) -> None:
         """Initialize and start refresh loop."""
         self._discover_agents()
-        self._update_all_outputs()
-        self._render_current_view()  # Create initial view
+        self._render_current_view()  # Create initial view (mounts cards)
+        self._update_all_outputs()   # Now cards are mounted, can update
         self.set_interval(self._refresh_interval, self._update_all_outputs)
 
     def watch_view_mode(self, new_mode: str) -> None:
